@@ -1,3 +1,5 @@
+import { useAppStore } from "@geolibre/core";
+import { useEffect, useRef } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
 import { UpdateNotificationModal } from "./components/layout/UpdateNotificationModal";
@@ -17,7 +19,8 @@ export default function App() {
   const layoutOptions = useLayoutOptions();
   const { themeMode, toggleThemeMode } = useThemeMode();
   const projectUrlLoadState = useProjectUrlLoader();
-  const { showOnboarding, dismissOnboarding } = useUiProfileBootstrap();
+  const { showOnboarding, dismissOnboarding, adminChecked } =
+    useUiProfileBootstrap();
   const {
     pending: pendingUpdate,
     remindLater,
@@ -30,6 +33,18 @@ export default function App() {
   useRuntimeEnvironmentVariables();
   useUndoRedoShortcuts();
   useBeforeUnloadGuard();
+
+  // Open the utility-design wizard on startup, once — but only after the
+  // one-time onboarding wizard (if any) has resolved, so the two dialogs
+  // never fight for the topmost z-index on a fresh profile.
+  const setUtilityDesignOpen = useAppStore((s) => s.setUtilityDesignOpen);
+  const hasAutoOpenedUtilityDesign = useRef(false);
+  useEffect(() => {
+    if (hasAutoOpenedUtilityDesign.current) return;
+    if (!adminChecked || showOnboarding) return;
+    hasAutoOpenedUtilityDesign.current = true;
+    setUtilityDesignOpen(true);
+  }, [adminChecked, showOnboarding, setUtilityDesignOpen]);
   return (
     <>
       <DesktopShell

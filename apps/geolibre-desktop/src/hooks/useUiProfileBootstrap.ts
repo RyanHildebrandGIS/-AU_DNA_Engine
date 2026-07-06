@@ -34,11 +34,16 @@ let bootstrapStarted = false;
  * 3. Keep a level preset's hidden plugin list in sync as external/bundled
  *    plugins finish loading after startup.
  *
- * @returns Whether to show the onboarding wizard, and a callback to dismiss it.
+ * @returns Whether to show the onboarding wizard, a callback to dismiss it,
+ * and whether the one-time admin-profile check has resolved (so callers that
+ * need to sequence something after onboarding — e.g. auto-opening another
+ * dialog — know when `showOnboarding` reflects its final value rather than
+ * the transient `false` before the check completes).
  */
 export function useUiProfileBootstrap(): {
   showOnboarding: boolean;
   dismissOnboarding: () => void;
+  adminChecked: boolean;
 } {
   const { plugins } = usePluginRegistry();
   const adminChecked = useBootstrapStore((state) => state.adminChecked);
@@ -138,5 +143,5 @@ export function useUiProfileBootstrap(): {
     });
   }, []);
 
-  return { showOnboarding, dismissOnboarding };
+  return { showOnboarding, dismissOnboarding, adminChecked };
 }
