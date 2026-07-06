@@ -296,7 +296,7 @@ export function UtilityDesignDialog({
       ) : null}
       <aside
         aria-label={t("utilityDesign.title")}
-        className="relative flex max-h-[min(28rem,50vh)] w-full shrink-0 flex-col border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-96 md:border-l md:border-t-0"
+        className="relative flex h-[min(34rem,75vh)] supports-[max-height:1dvh]:h-[min(34rem,75dvh)] w-full shrink-0 flex-col overflow-hidden border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:h-auto md:w-96 md:border-l md:border-t-0"
       >
       <div className="border-b p-4">
         <h2 className="text-lg font-semibold leading-none tracking-tight">
@@ -307,7 +307,7 @@ export function UtilityDesignDialog({
         </p>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="h-0 flex-1">
         <div className="flex flex-col gap-4 p-4 text-sm">
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2 font-medium">
