@@ -7,14 +7,7 @@ import {
   startGeoEditorDrawMode,
 } from "@geolibre/plugins";
 import { generateNetwork } from "@geolibre/utility-network";
-import {
-  Button,
-  Label,
-  ScrollArea,
-  Select,
-  Separator,
-  Slider,
-} from "@geolibre/ui";
+import { Button, Label, Select, Separator, Slider } from "@geolibre/ui";
 import type { Feature, MultiPolygon, Point, Polygon, FeatureCollection } from "geojson";
 import { Crosshair, Waypoints } from "lucide-react";
 import maplibregl from "maplibre-gl";
@@ -307,7 +300,15 @@ export function UtilityDesignDialog({
         </p>
       </div>
 
-      <ScrollArea className="h-0 flex-1">
+      {/* Plain native scroll (not the Radix ScrollArea used elsewhere in the
+          app) — its custom-scrollbar viewport fights percentage-height
+          resolution in a fixed-position mobile sheet, and native
+          overflow-y-auto is the most reliable option for touch scrolling on
+          iOS Safari. */}
+      <div
+        className="h-0 flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]"
+        style={{ touchAction: "pan-y" }}
+      >
         <div className="flex flex-col gap-4 p-4 text-sm">
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2 font-medium">
@@ -447,7 +448,7 @@ export function UtilityDesignDialog({
             ) : null}
           </div>
         </div>
-      </ScrollArea>
+      </div>
       </aside>
     </>
   );
