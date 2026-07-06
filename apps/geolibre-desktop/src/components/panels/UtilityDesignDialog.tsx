@@ -1,6 +1,11 @@
 import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { MapController } from "@geolibre/map";
-import { isGeoEditorAvailableForImport, SKETCHES_SOURCE_KIND } from "@geolibre/plugins";
+import {
+  cancelGeoEditorDraw,
+  isGeoEditorAvailableForImport,
+  SKETCHES_SOURCE_KIND,
+  startGeoEditorDrawMode,
+} from "@geolibre/plugins";
 import { generateNetwork } from "@geolibre/utility-network";
 import {
   Button,
@@ -114,6 +119,7 @@ export function UtilityDesignDialog({
   const [spacingKm, setSpacingKm] = useState(DEFAULT_SPACING_KM);
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
+  const [drawingArea, setDrawingArea] = useState(false);
   const [result, setResult] = useState<GeneratedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,12 +136,23 @@ export function UtilityDesignDialog({
     [mapControllerRef],
   );
 
-  const handleActivateEditor = useCallback(() => {
-    if (isGeoEditorAvailableForImport()) return;
+  // One click: ensure the editor is active, then jump straight into polygon
+  // draw mode — the user never has to find the right tool among the
+  // editor's general-purpose toolbar (draw/edit/file modes).
+  const handleDrawArea = useCallback(() => {
+    const enterDrawMode = () => {
+      startGeoEditorDrawMode("polygon");
+      setDrawingArea(true);
+    };
     const manager = getPluginManager();
-    if (manager.isActive(GEO_EDITOR_PLUGIN_ID)) return;
-    const activate = () =>
+    if (isGeoEditorAvailableForImport() || manager.isActive(GEO_EDITOR_PLUGIN_ID)) {
+      enterDrawMode();
+      return;
+    }
+    const activate = () => {
       manager.activate(GEO_EDITOR_PLUGIN_ID, createAppAPI(mapControllerRef));
+      enterDrawMode();
+    };
     // The editor reads the live map style to derive its drawing styles; if a
     // basemap style is still loading (e.g. right after app start), activating
     // immediately throws inside the plugin. Defer to the map's `load` event
@@ -147,6 +164,29 @@ export function UtilityDesignDialog({
       map.once("load", activate);
     }
   }, [mapControllerRef, getMap]);
+
+  const handleCancelDrawArea = useCallback(() => {
+    cancelGeoEditorDraw();
+    setDrawingArea(false);
+  }, []);
+
+  // The draw finishes when the polygon lands in the Sketches store layer
+  // (reactive, same as the rest of this component's step-1 detection) —
+  // no need to listen for the editor's own mode-change event.
+  useEffect(() => {
+    if (drawingArea && areaFeature) setDrawingArea(false);
+  }, [drawingArea, areaFeature]);
+
+  // Escape cancels the in-progress draw, mirroring the point-pick flow below.
+  useEffect(() => {
+    if (!drawingArea) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      handleCancelDrawArea();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [drawingArea, handleCancelDrawArea]);
 
   // The panel is non-modal (docked beside the map, never an overlay), so the
   // map underneath is already clickable — no need to hide anything while
@@ -245,10 +285,19 @@ export function UtilityDesignDialog({
   // `bottom-16` (not `bottom-0`) leaves room for PrimaryNav's h-16 bottom tab
   // bar on narrow viewports, so this bottom sheet doesn't cover it.
   return (
-    <aside
-      aria-label={t("utilityDesign.title")}
-      className="relative flex max-h-[min(28rem,50vh)] w-full shrink-0 flex-col border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-96 md:border-l md:border-t-0"
-    >
+    <>
+      {drawingArea ? (
+        <div
+          role="status"
+          className="pointer-events-none fixed left-1/2 top-4 z-40 -translate-x-1/2 rounded-full border bg-background px-4 py-2 text-sm shadow-lg"
+        >
+          {t("utilityDesign.step1Drawing")}
+        </div>
+      ) : null}
+      <aside
+        aria-label={t("utilityDesign.title")}
+        className="relative flex max-h-[min(28rem,50vh)] w-full shrink-0 flex-col border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-96 md:border-l md:border-t-0"
+      >
       <div className="border-b p-4">
         <h2 className="text-lg font-semibold leading-none tracking-tight">
           {t("utilityDesign.title")}
@@ -269,6 +318,20 @@ export function UtilityDesignDialog({
               <p className="pl-7 text-xs text-muted-foreground">
                 {t("utilityDesign.step1Done", { count: vertexCount })}
               </p>
+            ) : drawingArea ? (
+              <div className="flex flex-col gap-1.5 pl-7">
+                <p className="text-xs text-muted-foreground">
+                  {t("utilityDesign.step1Drawing")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-fit"
+                  onClick={handleCancelDrawArea}
+                >
+                  {t("utilityDesign.step1Cancel")}
+                </Button>
+              </div>
             ) : (
               <div className="flex flex-col gap-1.5 pl-7">
                 <p className="text-xs text-muted-foreground">
@@ -278,7 +341,7 @@ export function UtilityDesignDialog({
                   size="sm"
                   variant="secondary"
                   className="w-fit"
-                  onClick={handleActivateEditor}
+                  onClick={handleDrawArea}
                 >
                   {t("utilityDesign.step1Button")}
                 </Button>
@@ -385,6 +448,7 @@ export function UtilityDesignDialog({
           </div>
         </div>
       </ScrollArea>
-    </aside>
+      </aside>
+    </>
   );
 }

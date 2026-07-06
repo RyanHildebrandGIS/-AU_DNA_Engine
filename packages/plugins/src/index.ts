@@ -282,6 +282,8 @@ export {
   getGeometryEditTargetLayerId,
   subscribeGeometryEdit,
   isGeoEditorAvailableForImport,
+  startGeoEditorDrawMode,
+  cancelGeoEditorDraw,
   getGeoEditorFeatureCount,
   hasViewImportBaseline,
   loadViewFeaturesIntoEditor,

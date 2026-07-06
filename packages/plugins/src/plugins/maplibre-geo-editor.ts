@@ -7,7 +7,11 @@ import {
 import { Geoman, defaultLayerStyles } from "@geoman-io/maplibre-geoman-free";
 import type { Feature, FeatureCollection } from "geojson";
 import type maplibregl from "maplibre-gl";
-import { GeoEditor, type GeoEditorOptions } from "maplibre-gl-geo-editor";
+import {
+  GeoEditor,
+  type DrawMode,
+  type GeoEditorOptions,
+} from "maplibre-gl-geo-editor";
 import {
   SKETCHES_SOURCE_KIND,
   canEditLayerGeometry,
@@ -454,6 +458,22 @@ function syncSketchesToStore(): void {
  */
 export function isGeoEditorAvailableForImport(): boolean {
   return pluginActive && geoEditorControl != null && editTargetLayerId == null;
+}
+
+/**
+ * Programmatically enter a draw mode on the active editor, so a one-click
+ * affordance (e.g. "draw project area") can jump straight into drawing
+ * instead of requiring the user to find the tool in the editor's own
+ * toolbar. No-op if the editor isn't active yet — callers should activate it
+ * first (see `isGeoEditorAvailableForImport` / the plugin's `activate`).
+ */
+export function startGeoEditorDrawMode(mode: DrawMode): void {
+  geoEditorControl?.enableDrawMode(mode);
+}
+
+/** Cancel any in-progress draw/edit mode on the active editor. */
+export function cancelGeoEditorDraw(): void {
+  void geoEditorControl?.disableAllModes();
 }
 
 /** Number of features currently in the editor (for the load-confirm prompt). */

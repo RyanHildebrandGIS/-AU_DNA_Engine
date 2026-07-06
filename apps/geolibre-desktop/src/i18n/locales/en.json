@@ -2029,8 +2029,10 @@
     "title": "Utility Design",
     "description": "Draw a project area, pick a source, and auto-generate a junction-and-line network — no AI chat or API key needed.",
     "step1Title": "Draw a project area",
-    "step1Instructions": "Click below to enable the draw tool, then use the polygon button that appears on the map to draw your project boundary.",
-    "step1Button": "Enable draw tool",
+    "step1Instructions": "Click below, then click points on the map to draw your project boundary.",
+    "step1Button": "Draw project area",
+    "step1Drawing": "Click on the map to place points. Double-click (or press Enter) to finish, Esc to cancel.",
+    "step1Cancel": "Cancel drawing",
     "step1Done": "Project area drawn ({{count}} vertices).",
     "step2Title": "Utility type",
     "type": {
