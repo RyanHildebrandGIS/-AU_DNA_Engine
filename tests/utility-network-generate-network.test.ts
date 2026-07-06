@@ -1,22 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { generateNetwork } from "@geolibre/utility-network";
-import type { Feature, MultiPolygon, Point, Polygon } from "geojson";
+import {
+  generateNetwork,
+  generateNetworkFromRoads,
+} from "@geolibre/utility-network";
+import type { Feature, FeatureCollection, LineString, Point, Polygon } from "geojson";
 
-// A roughly 111km x 111km square at the equator (1 degree per side), so a
-// 20km grid spacing produces a handful of interior junctions.
-const SQUARE: Feature<Polygon> = {
+const AREA: Feature<Polygon> = {
   type: "Feature",
   properties: {},
   geometry: {
     type: "Polygon",
     coordinates: [
       [
-        [0, 0],
-        [0, 1],
-        [1, 1],
-        [1, 0],
-        [0, 0],
+        [-0.001, -0.001],
+        [-0.001, 0.011],
+        [0.011, 0.011],
+        [0.011, -0.001],
+        [-0.001, -0.001],
       ],
     ],
   },
@@ -26,98 +27,139 @@ function sourcePoint(coords: [number, number]): Feature<Point> {
   return { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: coords } };
 }
 
-describe("generateNetwork", () => {
-  it("generates junctions inside the polygon connected to the source by a tree", () => {
-    const result = generateNetwork(SQUARE, sourcePoint([-0.05, 0.5]), {
+// Same 3x3 street grid as utility-network-road-graph.test.ts.
+const XS = [0, 0.005, 0.01];
+const YS = [0, 0.005, 0.01];
+const GRID_ROADS: FeatureCollection<LineString> = {
+  type: "FeatureCollection",
+  features: [
+    ...YS.map((y) => ({
+      type: "Feature" as const,
+      properties: { highway: "residential" },
+      geometry: { type: "LineString" as const, coordinates: XS.map((x) => [x, y]) },
+    })),
+    ...XS.map((x) => ({
+      type: "Feature" as const,
+      properties: { highway: "residential" },
+      geometry: { type: "LineString" as const, coordinates: YS.map((y) => [x, y]) },
+    })),
+  ],
+};
+
+const SOURCE = sourcePoint([0, 0]);
+
+describe("generateNetworkFromRoads", () => {
+  it("generates junctions along roads connected to the source", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
       utilityType: "water",
-      spacingKm: 20,
+      spacingKm: 0.3,
     });
 
-    assert.ok(result.junctions.features.length > 1, "expected multiple junctions");
+    assert.ok(result.junctions.features.length > 0, "expected at least one junction");
     assert.equal(result.truncated, false);
-    // A tree connecting 1 source + N junctions has exactly N edges.
-    assert.equal(result.lines.features.length, result.junctions.features.length);
-
     for (const junction of result.junctions.features) {
-      const [lon, lat] = junction.geometry.coordinates;
-      assert.ok(lon >= 0 && lon <= 1, "junction longitude must fall inside the square");
-      assert.ok(lat >= 0 && lat <= 1, "junction latitude must fall inside the square");
       assert.equal(junction.properties.utilityType, "water");
     }
-
     for (const line of result.lines.features) {
-      assert.equal(line.geometry.coordinates.length, 2);
+      assert.equal(line.geometry.type, "LineString");
       assert.ok(line.properties.length_km >= 0);
+      assert.equal(line.properties.side, "right");
     }
   });
 
-  it("falls back to the polygon centroid when the polygon is smaller than the spacing", () => {
-    const tiny: Feature<Polygon> = {
-      type: "Feature",
-      properties: {},
-      geometry: {
-        type: "Polygon",
-        coordinates: [
-          [
-            [0, 0],
-            [0, 0.001],
-            [0.001, 0.001],
-            [0.001, 0],
-            [0, 0],
-          ],
-        ],
-      },
-    };
-    const result = generateNetwork(tiny, sourcePoint([1, 1]), {
-      utilityType: "sewer",
-      spacingKm: 20,
+  it("defaults to a 3m offset to the right, shifting lines off the centerline", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
     });
+    for (const line of result.lines.features) {
+      // An offset line's coordinates should not exactly match either
+      // endpoint of a raw grid edge (all grid coordinates are exact
+      // multiples of 0.005) — a loose but effective proxy for "this was
+      // actually shifted, not left on the centerline".
+      const [lon, lat] = line.geometry.coordinates[0];
+      const onGridLattice =
+        Math.abs(lon % 0.005) < 1e-9 && Math.abs(lat % 0.005) < 1e-9;
+      assert.ok(!onGridLattice, "offset line should not sit exactly on the raw grid");
+    }
+  });
 
-    assert.equal(result.junctions.features.length, 1);
-    assert.equal(result.lines.features.length, 1);
-    assert.equal(result.truncated, false);
+  it('"both" produces two lines (one per side) for every edge "left"/"right" produces one for', () => {
+    const right = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "right",
+    });
+    const both = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "both",
+    });
+    assert.equal(both.lines.features.length, right.lines.features.length * 2);
+    const sides = new Set(both.lines.features.map((f) => f.properties.side));
+    assert.deepEqual(sides, new Set(["left", "right"]));
   });
 
   it("truncates and reports it when junctions exceed maxJunctions", () => {
-    const result = generateNetwork(SQUARE, sourcePoint([-0.05, 0.5]), {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
       utilityType: "electric",
-      spacingKm: 5,
-      maxJunctions: 3,
+      spacingKm: 0.1,
+      maxJunctions: 2,
     });
-
-    assert.equal(result.junctions.features.length, 3);
-    assert.equal(result.lines.features.length, 3);
+    assert.equal(result.junctions.features.length, 2);
     assert.equal(result.truncated, true);
   });
 
   it("rejects a non-positive spacing", () => {
     assert.throws(() =>
-      generateNetwork(SQUARE, sourcePoint([-0.05, 0.5]), {
+      generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
         utilityType: "water",
         spacingKm: 0,
       }),
     );
     assert.throws(() =>
-      generateNetwork(SQUARE, sourcePoint([-0.05, 0.5]), {
+      generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
         utilityType: "water",
         spacingKm: Number.NaN,
       }),
     );
   });
 
-  it("handles a MultiPolygon area", () => {
-    const multi: Feature<MultiPolygon> = {
-      type: "Feature",
-      properties: {},
-      geometry: {
-        type: "MultiPolygon",
-        coordinates: [SQUARE.geometry.coordinates],
-      },
-    };
-    const result = generateNetwork(multi, sourcePoint([-0.05, 0.5]), {
-      utilityType: "fiber",
-      spacingKm: 20,
+  it("throws a clear error when no roads are given", () => {
+    const empty: FeatureCollection<LineString> = { type: "FeatureCollection", features: [] };
+    assert.throws(
+      () =>
+        generateNetworkFromRoads(AREA, SOURCE, empty, {
+          utilityType: "water",
+          spacingKm: 0.3,
+        }),
+      /No roads found/,
+    );
+  });
+});
+
+describe("generateNetwork (async wrapper)", () => {
+  it("fetches roads then delegates to generateNetworkFromRoads", async (t) => {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+      new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await generateNetwork(AREA, SOURCE, {
+      utilityType: "sewer",
+      spacingKm: 0.3,
     });
+
+    assert.equal(fetchMock.mock.calls.length, 1);
     assert.ok(result.junctions.features.length > 0);
   });
 });

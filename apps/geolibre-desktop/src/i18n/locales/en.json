@@ -2047,11 +2047,21 @@
     "step3Done": "Source set at {{lon}}, {{lat}}.",
     "step3Button": "Pick point on map",
     "step4Title": "Junction spacing",
-    "step4Helper": "Smaller spacing places more junctions across the project area.",
+    "step4Helper": "Smaller spacing places more junctions along the roads in the project area.",
+    "sideTitle": "Side of road",
+    "side": {
+      "left": "Left",
+      "right": "Right",
+      "both": "Both sides"
+    },
+    "offsetLabel": "Offset from centerline",
     "generate": "Generate network",
+    "generating": "Generating…",
     "regenerate": "Regenerate network",
     "resultSummary": "{{junctions}} junctions, {{lines}} line segments, {{km}} km total.",
-    "resultTruncated": "Junction count was capped — try a larger spacing."
+    "resultTruncated": "Junction count was capped — try a larger spacing.",
+    "roadNoticeTitle": "Fetching road data",
+    "roadNoticeDesc": "Generating a network sends the coordinates of your drawn project area to the public OpenStreetMap Overpass API, so the pipe network can follow real roads. No account or API key is needed, but the request goes to a shared public server."
   },
   "nav": {
     "label": "Primary navigation",

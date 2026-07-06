@@ -6,8 +6,20 @@ import {
   SKETCHES_SOURCE_KIND,
   startGeoEditorDrawMode,
 } from "@geolibre/plugins";
-import { generateNetwork } from "@geolibre/utility-network";
-import { Button, Label, Select, Separator, Slider } from "@geolibre/ui";
+import { generateNetwork, type NetworkSide } from "@geolibre/utility-network";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Label,
+  Select,
+  Separator,
+  Slider,
+} from "@geolibre/ui";
 import type { Feature, MultiPolygon, Point, Polygon, FeatureCollection } from "geojson";
 import { Crosshair, Waypoints } from "lucide-react";
 import maplibregl from "maplibre-gl";
@@ -21,6 +33,13 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { createAppAPI, getPluginManager } from "../../hooks/usePlugins";
+import {
+  hasOsmRoadFetchConsent,
+  recordOsmRoadFetchConsent,
+} from "../../lib/osm-road-fetch-consent";
+
+const DEFAULT_OFFSET_METERS = 3;
+const NETWORK_SIDES: NetworkSide[] = ["left", "right", "both"];
 
 const GEO_EDITOR_PLUGIN_ID = "maplibre-gl-geo-editor";
 const DEFAULT_SPACING_KM = 0.2;
@@ -110,9 +129,13 @@ export function UtilityDesignDialog({
 
   const [utilityType, setUtilityType] = useState<UtilityType>("water");
   const [spacingKm, setSpacingKm] = useState(DEFAULT_SPACING_KM);
+  const [side, setSide] = useState<NetworkSide>("right");
+  const [offsetMeters, setOffsetMeters] = useState(DEFAULT_OFFSET_METERS);
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [consentNoticeOpen, setConsentNoticeOpen] = useState(false);
   const [result, setResult] = useState<GeneratedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,20 +251,25 @@ export function UtilityDesignDialog({
     };
   }, [source, getMap]);
 
-  const canGenerate = Boolean(areaFeature) && Boolean(source);
+  const canGenerate = Boolean(areaFeature) && Boolean(source) && !generating;
 
-  const handleGenerate = useCallback(() => {
+  // Fetches real road data and generates the network — a genuine network
+  // round-trip now (unlike the old grid layout), hence `generating`.
+  const runGenerate = useCallback(async () => {
     if (!areaFeature || !source) return;
     setError(null);
+    setGenerating(true);
     try {
       const sourceFeature: Feature<Point> = {
         type: "Feature",
         properties: {},
         geometry: { type: "Point", coordinates: [source.lon, source.lat] },
       };
-      const generated = generateNetwork(areaFeature, sourceFeature, {
+      const generated = await generateNetwork(areaFeature, sourceFeature, {
         utilityType,
         spacingKm,
+        offsetMeters,
+        side,
       });
       if (result) {
         removeLayer(result.junctionsLayerId);
@@ -270,8 +298,37 @@ export function UtilityDesignDialog({
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(false);
     }
-  }, [areaFeature, source, utilityType, spacingKm, result, addGeoJsonLayer, removeLayer]);
+  }, [
+    areaFeature,
+    source,
+    utilityType,
+    spacingKm,
+    offsetMeters,
+    side,
+    result,
+    addGeoJsonLayer,
+    removeLayer,
+  ]);
+
+  // Generating sends the drawn area's coordinates to the public Overpass API,
+  // so the first click shows a one-time consent notice (mirrors the network
+  // routing/Valhalla consent gate elsewhere in the app).
+  const handleGenerateClick = useCallback(() => {
+    if (!hasOsmRoadFetchConsent()) {
+      setConsentNoticeOpen(true);
+      return;
+    }
+    void runGenerate();
+  }, [runGenerate]);
+
+  const confirmConsentAndGenerate = useCallback(() => {
+    recordOsmRoadFetchConsent();
+    setConsentNoticeOpen(false);
+    void runGenerate();
+  }, [runGenerate]);
 
   if (!active) return null;
 
@@ -430,10 +487,52 @@ export function UtilityDesignDialog({
 
           <Separator />
 
+          <div className="flex flex-col gap-1.5">
+            <Label className="font-medium">{t("utilityDesign.sideTitle")}</Label>
+            <div className="flex flex-col gap-2 pl-0">
+              <Select
+                value={side}
+                onChange={(e) => setSide(e.target.value as NetworkSide)}
+                className="max-w-[220px]"
+              >
+                {NETWORK_SIDES.map((s) => (
+                  <option key={s} value={s}>
+                    {t(`utilityDesign.side.${s}`)}
+                  </option>
+                ))}
+              </Select>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="utility-offset-meters" className="text-xs font-normal text-muted-foreground">
+                  {t("utilityDesign.offsetLabel")}
+                </Label>
+                <Input
+                  id="utility-offset-meters"
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={offsetMeters}
+                  onChange={(e) => setOffsetMeters(Number(e.target.value))}
+                  className="h-8 w-20"
+                />
+                <span className="text-xs text-muted-foreground">m</span>
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
           <div className="flex flex-col gap-2">
-            <Button disabled={!canGenerate} onClick={handleGenerate} className="gap-1.5">
+            <Button
+              disabled={!canGenerate}
+              onClick={handleGenerateClick}
+              className="gap-1.5"
+            >
               <Waypoints className="h-4 w-4" />
-              {result ? t("utilityDesign.regenerate") : t("utilityDesign.generate")}
+              {generating
+                ? t("utilityDesign.generating")
+                : result
+                  ? t("utilityDesign.regenerate")
+                  : t("utilityDesign.generate")}
             </Button>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
             {result ? (
@@ -450,6 +549,24 @@ export function UtilityDesignDialog({
         </div>
       </div>
       </aside>
+      <Dialog open={consentNoticeOpen} onOpenChange={setConsentNoticeOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("utilityDesign.roadNoticeTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("utilityDesign.roadNoticeDesc")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConsentNoticeOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={confirmConsentAndGenerate}>
+              {t("toolbar.item.continue")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

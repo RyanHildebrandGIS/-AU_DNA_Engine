@@ -812,7 +812,7 @@ export function createAssistantTools(
   const generateUtilityNetwork = tool({
     name: "generate_utility_network",
     description:
-      "Auto-generate a simple utility network inside a drawn project-area polygon: junctions spaced across the polygon, connected to a source/point-of-connection by a minimum-spanning tree of lines. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. This is a first-pass layout only (no road-network snapping or domain-specific rules yet).",
+      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API; no domain-specific rules yet (pipe sizing, slope, valve placement).",
     inputSchema: z.object({
       areaLayer: z
         .string()
@@ -827,10 +827,21 @@ export function createAssistantTools(
         .number()
         .positive()
         .describe(
-          "Target spacing between junctions, in kilometers (e.g. 0.15-0.3 for a subdivision block).",
+          "Target spacing between junctions along each road, in kilometers (e.g. 0.15-0.3 for a subdivision block).",
+        ),
+      offsetMeters: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe("Perpendicular offset from the road centerline, in meters. Defaults to 3."),
+      side: z
+        .enum(["left", "right", "both"])
+        .optional()
+        .describe(
+          '"left" or "right" of the road centerline (in the direction each road segment was drawn), or "both" for a parallel line on each side. Defaults to "right".',
         ),
     }),
-    callback: (input) => {
+    callback: async (input) => {
       const areaLayerRef = input.areaLayer?.trim() || "Sketches";
       const layer = resolveLayer(areaLayerRef);
       if (!layer) {
@@ -856,9 +867,11 @@ export function createAssistantTools(
           coordinates: [input.sourceLon, input.sourceLat],
         },
       };
-      const result = generateNetwork(areaFeature, source, {
+      const result = await generateNetwork(areaFeature, source, {
         utilityType: input.utilityType,
         spacingKm: input.spacingKm,
+        offsetMeters: input.offsetMeters,
+        side: input.side,
       });
       const label =
         input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);
