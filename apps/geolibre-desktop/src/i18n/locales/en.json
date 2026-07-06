@@ -1269,6 +1269,7 @@
     }
   },
   "toolbar": {
+    "utilityDesign": "Utility Design",
     "menu": {
       "project": "Project",
       "edit": "Edit",
@@ -1365,6 +1366,7 @@
       "notebook": "Jupyter Notebook",
       "dashboard": "Dashboard",
       "assistant": "AI Assistant",
+      "utilityDesign": "Utility Design",
       "geocode": "Geocode Addresses",
       "modelBuilder": "Batch & Models",
       "planetaryComputer": "Planetary Computer",
@@ -2022,6 +2024,32 @@
       "cancel": "Cancel",
       "save": "Save"
     }
+  },
+  "utilityDesign": {
+    "title": "Utility Design",
+    "description": "Draw a project area, pick a source, and auto-generate a junction-and-line network — no AI chat or API key needed.",
+    "step1Title": "Draw a project area",
+    "step1Instructions": "Click below to enable the draw tool, then use the polygon button that appears on the map to draw your project boundary.",
+    "step1Button": "Enable draw tool",
+    "step1Done": "Project area drawn ({{count}} vertices).",
+    "step2Title": "Utility type",
+    "type": {
+      "water": "Water",
+      "sewer": "Sewer",
+      "stormwater": "Stormwater",
+      "electric": "Electric",
+      "fiber": "Fiber"
+    },
+    "step3Title": "Source / point of connection",
+    "step3Instructions": "Pick where the network connects to existing infrastructure.",
+    "step3Done": "Source set at {{lon}}, {{lat}}.",
+    "step3Button": "Pick point on map",
+    "step4Title": "Junction spacing",
+    "step4Helper": "Smaller spacing places more junctions across the project area.",
+    "generate": "Generate network",
+    "regenerate": "Regenerate network",
+    "resultSummary": "{{junctions}} junctions, {{lines}} line segments, {{km}} km total.",
+    "resultTruncated": "Junction count was capped — try a larger spacing."
   },
   "assistant": {
     "title": "AI Assistant",

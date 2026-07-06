@@ -197,6 +197,20 @@ const VectorToolsDialog = lazy(() =>
     }),
 );
 
+const UtilityDesignDialog = lazy(() =>
+  import("../panels/UtilityDesignDialog")
+    .then((module) => ({
+      default: module.UtilityDesignDialog,
+    }))
+    .catch((error) => {
+      // Same chunk-load fallback rationale as ProcessingDialog above.
+      console.error("Failed to load UtilityDesignDialog", error);
+      const Fallback = (() =>
+        null) as unknown as typeof import("../panels/UtilityDesignDialog").UtilityDesignDialog;
+      return { default: Fallback };
+    }),
+);
+
 const ModelBuilderDialog = lazy(() =>
   import("../processing/ModelBuilderDialog")
     .then((module) => ({
@@ -1923,6 +1937,9 @@ export function DesktopShell({
       </Suspense>
       <Suspense fallback={null}>
         <ModelBuilderDialog mapControllerRef={mapControllerRef} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <UtilityDesignDialog mapControllerRef={mapControllerRef} />
       </Suspense>
       <Suspense fallback={null}>
         <StatisticsToolsDialog mapControllerRef={mapControllerRef} />
