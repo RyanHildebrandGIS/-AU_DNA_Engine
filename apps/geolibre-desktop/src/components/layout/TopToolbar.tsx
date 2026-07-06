@@ -61,7 +61,6 @@ import {
   Save,
   Sparkles,
   Sun,
-  Waypoints,
   Workflow,
   Wrench,
   ZoomIn,
@@ -243,7 +242,6 @@ export function TopToolbar({
   );
   const setPythonConsoleOpen = useAppStore((s) => s.setPythonConsoleOpen);
   const setAssistantOpen = useAppStore((s) => s.setAssistantOpen);
-  const setUtilityDesignOpen = useAppStore((s) => s.setUtilityDesignOpen);
   const projectName = useAppStore((s) => s.projectName);
   const projectPath = useAppStore((s) => s.projectPath);
   const projectGeneration = useAppStore((s) => s.projectGeneration);
@@ -587,14 +585,6 @@ export function TopToolbar({
       keywords: "assistant ai chat llm natural language gemini agent",
       icon: Sparkles,
       run: () => setAssistantOpen(true),
-    },
-    {
-      id: "proc.utilityDesign",
-      title: t("toolbar.command.utilityDesign"),
-      group: t("toolbar.commandGroup.processing"),
-      keywords: "utility design water sewer stormwater electric fiber network junction pipe",
-      icon: Waypoints,
-      run: () => setUtilityDesignOpen(true),
     },
     {
       id: "proc.geocode",
@@ -994,19 +984,6 @@ export function TopToolbar({
           onOpenGeoreferencer={() => setGeoreferencerOpen(true)}
         />
       )}
-      {/* Always-visible entry point for the guided utility-design wizard —
-          deliberately a bare button, not a dropdown item, so the workflow is
-          immediately discoverable rather than buried in a menu. */}
-      <Button
-        variant="ghost"
-        size={toolbarButtonSize}
-        className={toolbarButtonClass}
-        aria-label={t("toolbar.utilityDesign")}
-        onClick={() => setUtilityDesignOpen(true)}
-      >
-        <Waypoints className={toolbarIconClassName} />
-        {renderToolbarLabel(t("toolbar.utilityDesign"))}
-      </Button>
       {isMenuVisible(uiProfile, "controls") && (
         <ControlsMenu
           chrome={chrome}

@@ -4,12 +4,8 @@ import { isGeoEditorAvailableForImport, SKETCHES_SOURCE_KIND } from "@geolibre/p
 import { generateNetwork } from "@geolibre/utility-network";
 import {
   Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
   Label,
+  ScrollArea,
   Select,
   Separator,
   Slider,
@@ -90,20 +86,24 @@ function StepBadge({ done, n }: { done: boolean; n: number }): ReactElement {
 }
 
 /**
- * A guided, checklist-style wizard for the automated utility-design feature:
+ * A guided, checklist-style panel for the automated utility-design feature:
  * draw a project area, pick a source point, choose a utility type and
  * spacing, then generate a junction/line network via
  * {@link generateNetwork} directly (no LLM, no API key). The AI assistant's
  * `generate_utility_network` tool (lib/assistant/tools.ts) covers the same
- * capability conversationally; this dialog is the discoverable, one-click
+ * capability conversationally; this panel is the discoverable, one-click
  * front door to it.
+ *
+ * Rendered as a non-modal side panel (docked beside the map, same shell as
+ * StylePanel) rather than a dialog, so the map stays visible and clickable
+ * the whole time — steps 1 and 3 both require interacting with the live map
+ * while these instructions are showing.
  */
 export function UtilityDesignDialog({
   mapControllerRef,
-}: UtilityDesignDialogProps): ReactElement {
+}: UtilityDesignDialogProps): ReactElement | null {
   const { t } = useTranslation();
-  const open = useAppStore((s) => s.ui.utilityDesignOpen);
-  const setOpen = useAppStore((s) => s.setUtilityDesignOpen);
+  const active = useAppStore((s) => s.ui.activeView === "design");
   const sketchesLayer = useAppStore((s) =>
     s.layers.find((layer) => layer.metadata.sourceKind === SKETCHES_SOURCE_KIND),
   );
@@ -148,20 +148,18 @@ export function UtilityDesignDialog({
     }
   }, [mapControllerRef, getMap]);
 
-  // Close the dialog while picking so the map underneath is clickable, then
-  // reopen once a point is captured or the pick is cancelled — same pattern
-  // as FieldCollectionDialog's point-pick flow.
+  // The panel is non-modal (docked beside the map, never an overlay), so the
+  // map underneath is already clickable — no need to hide anything while
+  // picking, unlike FieldCollectionDialog's modal point-pick flow.
   const handlePickSource = useCallback(() => {
     setPicking(true);
-    setOpen(false);
-  }, [setOpen]);
+  }, []);
 
   useEffect(() => {
     if (!picking) return;
     const map = getMap();
     if (!map) {
       setPicking(false);
-      setOpen(true);
       return;
     }
     const prevCursor = map.getCanvas().style.cursor;
@@ -169,12 +167,10 @@ export function UtilityDesignDialog({
     const handleClick = (e: maplibregl.MapMouseEvent) => {
       setSource({ lon: e.lngLat.lng, lat: e.lngLat.lat });
       setPicking(false);
-      setOpen(true);
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setPicking(false);
-      setOpen(true);
     };
     map.once("click", handleClick);
     window.addEventListener("keydown", handleKey);
@@ -183,7 +179,7 @@ export function UtilityDesignDialog({
       window.removeEventListener("keydown", handleKey);
       map.getCanvas().style.cursor = prevCursor;
     };
-  }, [picking, getMap, setOpen]);
+  }, [picking, getMap]);
 
   // Show a temporary marker for the picked source point (not a saved layer).
   useEffect(() => {
@@ -244,20 +240,26 @@ export function UtilityDesignDialog({
     }
   }, [areaFeature, source, utilityType, spacingKm, result, addGeoJsonLayer, removeLayer]);
 
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next: boolean) => {
-        if (!next) setOpen(false);
-      }}
-    >
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{t("utilityDesign.title")}</DialogTitle>
-          <DialogDescription>{t("utilityDesign.description")}</DialogDescription>
-        </DialogHeader>
+  if (!active) return null;
 
-        <div className="flex flex-col gap-4 text-sm">
+  // `bottom-16` (not `bottom-0`) leaves room for PrimaryNav's h-16 bottom tab
+  // bar on narrow viewports, so this bottom sheet doesn't cover it.
+  return (
+    <aside
+      aria-label={t("utilityDesign.title")}
+      className="relative flex max-h-[min(28rem,50vh)] w-full shrink-0 flex-col border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-96 md:border-l md:border-t-0"
+    >
+      <div className="border-b p-4">
+        <h2 className="text-lg font-semibold leading-none tracking-tight">
+          {t("utilityDesign.title")}
+        </h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          {t("utilityDesign.description")}
+        </p>
+      </div>
+
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-4 p-4 text-sm">
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2 font-medium">
               <StepBadge done={Boolean(areaFeature)} n={1} />
@@ -382,7 +384,7 @@ export function UtilityDesignDialog({
             ) : null}
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </ScrollArea>
+    </aside>
   );
 }

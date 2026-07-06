@@ -117,6 +117,8 @@ import {
 } from "../panels/PluginRightPanel";
 import { StylePanel } from "../panels/StylePanel";
 import { SharedSidebar } from "../panels/SharedSidebar";
+import { CostPanel } from "../panels/CostPanel";
+import { Dialog, DialogContent } from "@geolibre/ui";
 import { Layers, SlidersHorizontal } from "lucide-react";
 import { StoryMapComposeBar } from "../storymap/StoryMapComposeBar";
 import { StoryMapPanel } from "../storymap/StoryMapPanel";
@@ -126,6 +128,7 @@ import { FileNamePromptDialog } from "./FileNamePromptDialog";
 import { ProjectPluginTrustDialog } from "./ProjectPluginTrustDialog";
 import { StatusBar } from "./StatusBar";
 import { TopToolbar } from "./TopToolbar";
+import { PrimaryNav } from "./PrimaryNav";
 import type { LayoutOptions } from "../../hooks/useLayoutOptions";
 import type { ThemeMode } from "../../hooks/useThemeMode";
 import type { ProjectUrlLoadState } from "../../hooks/useProjectUrlLoader";
@@ -548,6 +551,8 @@ export function DesktopShell({
   }, [activePanelId]);
   const assistantOpen = useAppStore((s) => s.ui.assistantOpen);
   const dashboardOpen = useAppStore((s) => s.ui.dashboardOpen);
+  const moreDrawerOpen = useAppStore((s) => s.ui.moreDrawerOpen);
+  const setMoreDrawerOpen = useAppStore((s) => s.setMoreDrawerOpen);
   const geometryEditLayerId = useSyncExternalStore(
     subscribeGeometryEdit,
     getGeometryEditTargetLayerId,
@@ -1612,28 +1617,34 @@ export function DesktopShell({
   return (
     <div
       ref={shellRef}
-      className="relative flex h-full min-w-0 flex-col overflow-hidden bg-background"
+      className="relative flex h-full min-w-0 flex-col overflow-hidden bg-background md:flex-row"
       style={shellStyle}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      <PrimaryNav visible={layoutOptions.toolbarVisible} />
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {layoutOptions.toolbarVisible ? (
-        <SectionErrorBoundary label="Toolbar">
-          <TopToolbar
-            compact={layoutOptions.compact}
-            diagnosticsErrorCount={diagnostics.errorCount}
-            mapControllerRef={mapControllerRef}
-            mapReadyGeneration={mapReadyGeneration}
-            showLabels={layoutOptions.toolbarLabels}
-            showProjectInfo={layoutOptions.showProjectInfo}
-            themeMode={themeMode}
-            collaboration={collaboration}
-            onOpenDiagnostics={() => setDiagnosticsOpen(true)}
-            onToggleThemeMode={onToggleThemeMode}
-          />
-        </SectionErrorBoundary>
+        <Dialog open={moreDrawerOpen} onOpenChange={setMoreDrawerOpen}>
+          <DialogContent className="max-w-2xl">
+            <SectionErrorBoundary label="Toolbar">
+              <TopToolbar
+                compact={layoutOptions.compact}
+                diagnosticsErrorCount={diagnostics.errorCount}
+                mapControllerRef={mapControllerRef}
+                mapReadyGeneration={mapReadyGeneration}
+                showLabels={layoutOptions.toolbarLabels}
+                showProjectInfo={layoutOptions.showProjectInfo}
+                themeMode={themeMode}
+                collaboration={collaboration}
+                onOpenDiagnostics={() => setDiagnosticsOpen(true)}
+                onToggleThemeMode={onToggleThemeMode}
+              />
+            </SectionErrorBoundary>
+          </DialogContent>
+        </Dialog>
       ) : null}
       <div
         data-workspace-row=""
@@ -1847,6 +1858,18 @@ export function DesktopShell({
             </Suspense>
           </SectionErrorBoundary>
         ) : null}
+        {/* Design/Cost nav destinations: a non-modal panel docked beside the
+            always-visible map (own slot, independent of the Layers/Style
+            replace-panel machinery above) so the map stays interactive while
+            these panels' instructions are showing. */}
+        <SectionErrorBoundary label="Utility design panel">
+          <Suspense fallback={null}>
+            <UtilityDesignDialog mapControllerRef={mapControllerRef} />
+          </Suspense>
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Cost panel">
+          <CostPanel />
+        </SectionErrorBoundary>
       </div>
       {layoutOptions.attributePanelVisible ? (
         <SectionErrorBoundary label="Attribute table">
@@ -1939,9 +1962,6 @@ export function DesktopShell({
         <ModelBuilderDialog mapControllerRef={mapControllerRef} />
       </Suspense>
       <Suspense fallback={null}>
-        <UtilityDesignDialog mapControllerRef={mapControllerRef} />
-      </Suspense>
-      <Suspense fallback={null}>
         <StatisticsToolsDialog mapControllerRef={mapControllerRef} />
       </Suspense>
       <Suspense fallback={null}>
@@ -1991,6 +2011,7 @@ export function DesktopShell({
           {dropError ?? dropMessage}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

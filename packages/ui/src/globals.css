@@ -28,11 +28,15 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    /* True near-black rather than the navy-tinted shadcn default, with card/
+       popover a touch lighter for subtle elevation — closer to a minimal,
+       fintech-app dark surface. Everything else below (accent, muted,
+       border, ring) is left as-is; this is a scoped nudge, not a retheme. */
+    --background: 0 0% 5%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
+    --card: 0 0% 8%;
     --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
+    --popover: 0 0% 8%;
     --popover-foreground: 210 40% 98%;
     --primary: 217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;

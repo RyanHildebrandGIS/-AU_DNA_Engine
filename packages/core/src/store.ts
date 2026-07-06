@@ -212,7 +212,11 @@ export interface AppState {
     // save the resulting camera back into this chapter (issue #775).
     storymapComposingId: string | null;
     modelBuilderOpen: boolean;
-    utilityDesignOpen: boolean;
+    // Primary navigation: which destination panel (if any) shows beside the
+    // always-mounted map workspace, and whether the "More" drawer (the
+    // legacy toolbar's menus) is open.
+    activeView: "map" | "design" | "cost";
+    moreDrawerOpen: boolean;
     zoomToSelectedFeature: boolean;
     // Live-collaboration dialog visibility. Lifted into the store (rather than
     // local toolbar state) so the on-canvas session-status badge can reopen the
@@ -296,7 +300,8 @@ export interface AppState {
   ) => void;
   setStorymapComposing: (chapterId: string | null) => void;
   setModelBuilderOpen: (open: boolean) => void;
-  setUtilityDesignOpen: (open: boolean) => void;
+  setActiveView: (view: "map" | "design" | "cost") => void;
+  setMoreDrawerOpen: (open: boolean) => void;
   setCollaborateDialogOpen: (open: boolean) => void;
   setZoomToSelectedFeature: (enabled: boolean) => void;
 
@@ -611,7 +616,8 @@ export const useAppStore = create<AppState>()(
         storymapReturnToEditor: false,
         storymapComposingId: null,
         modelBuilderOpen: false,
-        utilityDesignOpen: false,
+        activeView: "map",
+        moreDrawerOpen: false,
         zoomToSelectedFeature: false,
         collaborateDialogOpen: false,
       },
@@ -839,8 +845,10 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ ui: { ...s.ui, storymapComposingId: chapterId } })),
       setModelBuilderOpen: (open) =>
         set((s) => ({ ui: { ...s.ui, modelBuilderOpen: open } })),
-      setUtilityDesignOpen: (open) =>
-        set((s) => ({ ui: { ...s.ui, utilityDesignOpen: open } })),
+      setActiveView: (view) =>
+        set((s) => ({ ui: { ...s.ui, activeView: view } })),
+      setMoreDrawerOpen: (open) =>
+        set((s) => ({ ui: { ...s.ui, moreDrawerOpen: open } })),
       setCollaborateDialogOpen: (open) =>
         set((s) => ({ ui: { ...s.ui, collaborateDialogOpen: open } })),
       setZoomToSelectedFeature: (enabled) =>

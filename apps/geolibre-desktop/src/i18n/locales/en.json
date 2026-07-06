@@ -2051,6 +2051,17 @@
     "resultSummary": "{{junctions}} junctions, {{lines}} line segments, {{km}} km total.",
     "resultTruncated": "Junction count was capped — try a larger spacing."
   },
+  "nav": {
+    "label": "Primary navigation",
+    "design": "Design",
+    "map": "Map",
+    "cost": "Cost",
+    "more": "More"
+  },
+  "cost": {
+    "title": "Cost",
+    "comingSoon": "Cost estimation is coming soon."
+  },
   "assistant": {
     "title": "AI Assistant",
     "resize": "Resize assistant panel",

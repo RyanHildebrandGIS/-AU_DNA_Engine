@@ -34,17 +34,17 @@ export default function App() {
   useUndoRedoShortcuts();
   useBeforeUnloadGuard();
 
-  // Open the utility-design wizard on startup, once — but only after the
+  // Land on the Design nav destination on startup, once — but only after the
   // one-time onboarding wizard (if any) has resolved, so the two dialogs
   // never fight for the topmost z-index on a fresh profile.
-  const setUtilityDesignOpen = useAppStore((s) => s.setUtilityDesignOpen);
+  const setActiveView = useAppStore((s) => s.setActiveView);
   const hasAutoOpenedUtilityDesign = useRef(false);
   useEffect(() => {
     if (hasAutoOpenedUtilityDesign.current) return;
     if (!adminChecked || showOnboarding) return;
     hasAutoOpenedUtilityDesign.current = true;
-    setUtilityDesignOpen(true);
-  }, [adminChecked, showOnboarding, setUtilityDesignOpen]);
+    setActiveView("design");
+  }, [adminChecked, showOnboarding, setActiveView]);
   return (
     <>
       <DesktopShell
