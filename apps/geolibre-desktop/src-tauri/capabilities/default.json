@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "Default capabilities for GeoLibre Desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    "fs:allow-write-file",
+    "fs:allow-write-text-file",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "http://*" },
+        { "url": "https://*" }
+      ]
+    },
+    {
+      "comment": "Geocoding (place search / reverse geocode) is routed through the native HTTP client so it bypasses the WebView's CORS — public Nominatim's CDN intermittently omits the CORS header on cached responses, which the WebView rejects as 'Search failed'. Also lets us send a User-Agent as Nominatim's policy requires. Scoped to the built-in geocoder provider hosts only (keep in sync with the GEOCODING_PROVIDERS registry / lib/geocoding-fetch.ts); custom/self-hosted endpoints fall back to the browser fetch.",
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://nominatim.openstreetmap.org/*" },
+        { "url": "https://api.geocode.earth/*" },
+        { "url": "https://geocode.arcgis.com/*" },
+        { "url": "https://api.mapbox.com/*" },
+        { "url": "https://maps.googleapis.com/*" }
+      ]
+    }
+  ]
+}
