@@ -8,7 +8,14 @@ import type { MapController } from "@geolibre/map";
 import type { InvokableTool, JSONValue } from "@strands-agents/sdk";
 import maplibregl from "maplibre-gl";
 import { tool } from "@strands-agents/sdk";
-import type { FeatureCollection } from "geojson";
+import { generateNetwork } from "@geolibre/utility-network";
+import type {
+  Feature,
+  FeatureCollection,
+  MultiPolygon,
+  Point,
+  Polygon,
+} from "geojson";
 import { z } from "zod";
 import { inferPropertyColumns } from "../pglite-sql";
 import { consoleDeps, runConsoleCode } from "../pyodide/pyodide-console";
@@ -802,6 +809,77 @@ export function createAssistantTools(
     },
   });
 
+  const generateUtilityNetwork = tool({
+    name: "generate_utility_network",
+    description:
+      "Auto-generate a simple utility network inside a drawn project-area polygon: junctions spaced across the polygon, connected to a source/point-of-connection by a minimum-spanning tree of lines. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. This is a first-pass layout only (no road-network snapping or domain-specific rules yet).",
+    inputSchema: z.object({
+      areaLayer: z
+        .string()
+        .optional()
+        .describe(
+          'Name or id of the polygon layer to use as the project area. Defaults to "Sketches".',
+        ),
+      utilityType: z.enum(["water", "sewer", "stormwater", "electric", "fiber"]),
+      sourceLon: z.number().describe("Longitude of the source / point of connection."),
+      sourceLat: z.number().describe("Latitude of the source / point of connection."),
+      spacingKm: z
+        .number()
+        .positive()
+        .describe(
+          "Target spacing between junctions, in kilometers (e.g. 0.15-0.3 for a subdivision block).",
+        ),
+    }),
+    callback: (input) => {
+      const areaLayerRef = input.areaLayer?.trim() || "Sketches";
+      const layer = resolveLayer(areaLayerRef);
+      if (!layer) {
+        throw new Error(
+          `No layer matching "${areaLayerRef}". Draw a project-area polygon first.`,
+        );
+      }
+      const areaFeature = layer.geojson?.features?.find(
+        (feature) =>
+          feature.geometry?.type === "Polygon" ||
+          feature.geometry?.type === "MultiPolygon",
+      ) as Feature<Polygon | MultiPolygon> | undefined;
+      if (!areaFeature) {
+        throw new Error(
+          `Layer "${layer.name}" has no polygon feature to use as the project area.`,
+        );
+      }
+      const source: Feature<Point> = {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "Point",
+          coordinates: [input.sourceLon, input.sourceLat],
+        },
+      };
+      const result = generateNetwork(areaFeature, source, {
+        utilityType: input.utilityType,
+        spacingKm: input.spacingKm,
+      });
+      const label =
+        input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);
+      const junctionsLayerId = store().addGeoJsonLayer(
+        `${label} junctions`,
+        result.junctions as unknown as FeatureCollection,
+      );
+      const linesLayerId = store().addGeoJsonLayer(
+        `${label} network lines`,
+        result.lines as unknown as FeatureCollection,
+      );
+      return json({
+        junctionsLayerId,
+        linesLayerId,
+        junctionCount: result.junctions.features.length,
+        lineCount: result.lines.features.length,
+        truncated: result.truncated,
+      });
+    },
+  });
+
   return [
     listLayers,
     runSql,
@@ -820,5 +898,6 @@ export function createAssistantTools(
     applySymbology,
     runMaplibreJs,
     runPython,
+    generateUtilityNetwork,
   ] as InvokableTool<unknown, unknown>[];
 }
