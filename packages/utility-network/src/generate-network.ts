@@ -1,5 +1,5 @@
-import distance from "@turf/distance";
 import { featureCollection, lineString, point } from "@turf/helpers";
+import length from "@turf/length";
 import lineOffset from "@turf/line-offset";
 import type {
   Feature,
@@ -8,6 +8,7 @@ import type {
   MultiPolygon,
   Point,
   Polygon,
+  Position,
 } from "geojson";
 import { fetchOsmRoads, type FetchOsmRoadsOptions } from "./fetch-roads";
 import {
@@ -108,15 +109,54 @@ export function generateNetworkFromRoads(
     (node) => tree.distanceKm[node] !== Infinity,
   );
 
-  // Union of every edge along every junction's path back to the source, so
-  // shared trunk segments are emitted once rather than once per junction.
-  const usedEdges = new Map<string, [number, number]>();
+  // Children (tree-parent -> child) restricted to nodes that actually lie on
+  // some junction's path back to the source, so shared trunk sections are
+  // walked once rather than once per junction.
+  const childrenOf = new Map<number, Set<number>>();
   for (const junctionNode of junctionNodes) {
     const path = pathToRoot(tree, junctionNode);
     for (let i = 0; i < path.length - 1; i++) {
-      const [a, b] = [path[i], path[i + 1]];
-      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-      usedEdges.set(key, [a, b]);
+      const [parent, child] = [path[i], path[i + 1]];
+      let children = childrenOf.get(parent);
+      if (!children) {
+        children = new Set();
+        childrenOf.set(parent, children);
+      }
+      children.add(child);
+    }
+  }
+  const junctionNodeSet = new Set(junctionNodes);
+  // A node ends a continuous chain (rather than just passing through) when
+  // it's a junction, or the real road network branches there (more than one
+  // child) or dead-ends there (no children) — every other node just carries
+  // the chain's geometry through it without splitting the line.
+  const isDecisionPoint = (node: number): boolean =>
+    node === rootNode ||
+    junctionNodeSet.has(node) ||
+    (childrenOf.get(node)?.size ?? 0) !== 1;
+
+  // Walk every continuous chain of road segments between two decision
+  // points, collecting every vertex along the way, so line-offset gets the
+  // whole path at once — offsetting a single 2-point edge at a time left
+  // gaps at every intermediate road vertex on any curving or multi-segment
+  // road, not just at real junctions.
+  const chains: Position[][] = [];
+  const toExpand: number[] = [rootNode];
+  const expanded = new Set<number>();
+  while (toExpand.length > 0) {
+    const start = toExpand.pop();
+    if (start === undefined || expanded.has(start)) continue;
+    expanded.add(start);
+    for (const firstChild of childrenOf.get(start) ?? []) {
+      const coords: Position[] = [graph.nodes[start], graph.nodes[firstChild]];
+      let current = firstChild;
+      while (!isDecisionPoint(current)) {
+        const [next] = childrenOf.get(current) ?? [];
+        coords.push(graph.nodes[next]);
+        current = next;
+      }
+      chains.push(coords);
+      toExpand.push(current);
     }
   }
 
@@ -138,11 +178,9 @@ export function generateNetworkFromRoads(
     { id: string; utilityType: string; length_km: number; side: "left" | "right" }
   >[] = [];
   let lineId = 1;
-  for (const [a, b] of usedEdges.values()) {
-    const centerline = lineString([graph.nodes[a], graph.nodes[b]]);
-    const lengthKm = distance(graph.nodes[a], graph.nodes[b], {
-      units: "kilometers",
-    });
+  for (const coords of chains) {
+    const centerline = lineString(coords);
+    const lengthKm = length(centerline, { units: "kilometers" });
     for (const s of sides) {
       const offset = lineOffset(centerline, s === "left" ? offsetMeters : -offsetMeters, {
         units: "meters",

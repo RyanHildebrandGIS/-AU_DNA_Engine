@@ -100,6 +100,51 @@ describe("generateNetworkFromRoads", () => {
     assert.deepEqual(sides, new Set(["left", "right"]));
   });
 
+  it("keeps a multi-vertex road as one continuous line instead of one per graph edge", () => {
+    // A single straight road with 5 vertices (4 graph edges) and no
+    // intersections along the way — everything between the source (at the
+    // road's far end) and the one junction (at the road's start, the only
+    // spacing candidate given a spacing larger than the road) is a plain
+    // pass-through chain, so it should come back as ONE line spanning all 5
+    // vertices, not fragmented into 4 separate 2-point segments (the bug:
+    // offsetting each tiny edge independently left visible gaps at every
+    // original road vertex, not just at real junctions).
+    const straightRoad: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0],
+              [0.001, 0],
+              [0.002, 0],
+              [0.003, 0],
+              [0.004, 0],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      sourcePoint([0.004, 0]),
+      straightRoad,
+      {
+        utilityType: "water",
+        // Larger than the road's ~0.44km length: placeJunctionsAlongRoads
+        // only samples distance 0 along the road (its start vertex), giving
+        // exactly one junction candidate distinct from the source.
+        spacingKm: 1,
+      },
+    );
+    assert.equal(result.junctions.features.length, 1);
+    assert.equal(result.lines.features.length, 1);
+    assert.equal(result.lines.features[0].geometry.coordinates.length, 5);
+  });
+
   it("truncates and reports it when junctions exceed maxJunctions", () => {
     const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
       utilityType: "electric",
