@@ -18,6 +18,7 @@
  * the derived id), so persisted values can't silently fall back to the default.
  */
 const PRESET_SCHEME_IDS = [
+  "claude",
   "blue",
   "violet",
   "emerald",
@@ -36,7 +37,7 @@ export type ThemeScheme = PresetScheme | "custom";
  * ever changes to another preset, add a `[data-theme="<old default>"]` block in
  * `globals.css` for the now-non-default scheme (see `applyThemeScheme`).
  */
-export const DEFAULT_THEME_SCHEME: PresetScheme = "blue";
+export const DEFAULT_THEME_SCHEME: PresetScheme = "claude";
 
 /** Seed color for the custom picker before the user changes it (a teal-cyan). */
 export const DEFAULT_CUSTOM_COLOR = "#0ea5e9";
@@ -54,6 +55,11 @@ export interface ThemeSchemeOption {
  * separately (its swatch is the live picked color), so it is not listed here.
  */
 export const THEME_SCHEMES: readonly ThemeSchemeOption[] = [
+  {
+    id: "claude",
+    labelKey: "settings.appearance.scheme.claude",
+    swatch: "hsl(14.8 63.1% 59.6%)",
+  },
   {
     id: "blue",
     labelKey: "settings.appearance.scheme.blue",

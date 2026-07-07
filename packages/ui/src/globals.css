@@ -9,8 +9,12 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
+    /* Claude orange (~#D97757) is the default accent — see theme-schemes.ts's
+       DEFAULT_THEME_SCHEME invariant: the default scheme's tokens live here,
+       unguarded by a [data-theme] selector; the previous default ("blue") got
+       its own explicit block below so it stays selectable in the picker. */
+    --primary: 14.8 63.1% 59.6%;
+    --primary-foreground: 222.2 47.4% 11.2%;
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
@@ -23,7 +27,7 @@
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --ring: 14.8 63.1% 59.6%;
     --radius: 0.5rem;
   }
 
@@ -38,7 +42,7 @@
     --card-foreground: 210 40% 98%;
     --popover: 0 0% 8%;
     --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
+    --primary: 14.8 63.1% 59.6%;
     --primary-foreground: 222.2 47.4% 11.2%;
     --secondary: 217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
@@ -50,6 +54,20 @@
     --destructive-foreground: 210 40% 98%;
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
+    --ring: 14.8 63.1% 59.6%;
+  }
+
+  /* "blue" was the default scheme before Claude orange became the default —
+     kept as its own preset (unlike the other presets below, whose light/dark
+     primaries never lived at :root/.dark) so it stays selectable as-is. */
+  [data-theme="blue"] {
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --ring: 221.2 83.2% 53.3%;
+  }
+  [data-theme="blue"].dark {
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
     --ring: 224.3 76.3% 48%;
   }
 

@@ -1164,6 +1164,7 @@
       "customColor": "Custom color",
       "customColorHex": "Custom color hex code",
       "scheme": {
+        "claude": "Claude",
         "blue": "Blue",
         "violet": "Violet",
         "emerald": "Emerald",

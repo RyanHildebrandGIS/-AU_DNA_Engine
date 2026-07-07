@@ -25,7 +25,7 @@ import {
   Slider,
 } from "@geolibre/ui";
 import type { Feature, MultiPolygon, Point, Polygon, FeatureCollection } from "geojson";
-import { Crosshair, Waypoints } from "lucide-react";
+import { Crosshair, Loader2, Waypoints } from "lucide-react";
 import maplibregl from "maplibre-gl";
 import {
   useCallback,
@@ -296,11 +296,14 @@ export function UtilityDesignDialog({
   const canGenerate = Boolean(areaFeature) && Boolean(source) && !generating;
 
   // Fetches real road data and generates the network — a genuine network
-  // round-trip now (unlike the old grid layout), hence `generating`.
+  // round-trip now (unlike the old grid layout), hence `generating`. Switches
+  // to the Map tab on mobile for the duration, same as draw/pick, so the
+  // user can watch the network appear rather than stare at the Design sheet.
   const runGenerate = useCallback(async () => {
     if (!areaFeature || !source) return;
     setError(null);
     setGenerating(true);
+    switchToMapForAction();
     try {
       const sourceFeature: Feature<Point> = {
         type: "Feature",
@@ -356,6 +359,7 @@ export function UtilityDesignDialog({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setGenerating(false);
+      switchBackFromMapAction();
     }
   }, [
     areaFeature,
@@ -369,6 +373,8 @@ export function UtilityDesignDialog({
     result,
     addGeoJsonLayer,
     removeLayer,
+    switchToMapForAction,
+    switchBackFromMapAction,
   ]);
 
   // Generating sends the drawn area's coordinates to the public Overpass API,
@@ -388,7 +394,35 @@ export function UtilityDesignDialog({
     void runGenerate();
   }, [runGenerate]);
 
-  if (!active) return null;
+  // On mobile, this bottom sheet gets shown/hidden a lot now (draw, pick,
+  // generate all bounce over to Map and back) — an animated slide+fade
+  // instead of an instant mount/unmount makes those bounces read as a
+  // deliberate transition rather than a jarring flash. Desktop keeps the
+  // original instant show/hide: the panel there is a flex column sibling of
+  // the map, and a lingering, still-full-width invisible copy during a fade
+  // would visibly steal layout space, so the delay only applies on mobile.
+  const [mounted, setMounted] = useState(active);
+  const [entered, setEntered] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setMounted(true);
+      if (!isMobile) {
+        setEntered(true);
+        return;
+      }
+      const raf = requestAnimationFrame(() => setEntered(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    setEntered(false);
+    if (!isMobile) {
+      setMounted(false);
+      return;
+    }
+    const timeout = setTimeout(() => setMounted(false), 300);
+    return () => clearTimeout(timeout);
+  }, [active, isMobile]);
+
+  if (!mounted) return null;
 
   // `bottom-16` (not `bottom-0`) leaves room for PrimaryNav's h-16 bottom tab
   // bar on narrow viewports, so this bottom sheet doesn't cover it.
@@ -404,7 +438,12 @@ export function UtilityDesignDialog({
       ) : null}
       <aside
         aria-label={t("utilityDesign.title")}
-        className="relative flex h-[min(34rem,75vh)] supports-[max-height:1dvh]:h-[min(34rem,75dvh)] w-full shrink-0 flex-col overflow-hidden border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl md:h-auto md:w-96 md:border-l md:border-t-0"
+        className={
+          "relative flex h-[min(34rem,75vh)] supports-[max-height:1dvh]:h-[min(34rem,75dvh)] w-full shrink-0 flex-col overflow-hidden border-t bg-card max-md:fixed max-md:inset-x-0 max-md:bottom-16 max-md:z-30 max-md:shadow-xl max-md:transition-all max-md:duration-300 max-md:ease-out md:h-auto md:w-96 md:border-l md:border-t-0 " +
+          (entered
+            ? "max-md:translate-y-0 max-md:opacity-100"
+            : "max-md:translate-y-8 max-md:opacity-0")
+        }
       >
       <div className="border-b p-4">
         <h2 className="text-lg font-semibold leading-none tracking-tight">
@@ -612,9 +651,13 @@ export function UtilityDesignDialog({
             <Button
               disabled={!canGenerate}
               onClick={handleGenerateClick}
-              className="gap-1.5"
+              className="gap-1.5 transition-colors"
             >
-              <Waypoints className="h-4 w-4" />
+              {generating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Waypoints className="h-4 w-4" />
+              )}
               {generating
                 ? t("utilityDesign.generating")
                 : result
