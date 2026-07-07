@@ -2055,11 +2055,18 @@
       "both": "Both sides"
     },
     "offsetLabel": "Offset from centerline",
+    "coverageTitle": "Coverage",
+    "coverage": {
+      "mainline": "Mainline only",
+      "mainlineAndServices": "Mainline + services"
+    },
     "generate": "Generate network",
     "generating": "Generating…",
     "regenerate": "Regenerate network",
     "resultSummary": "{{junctions}} junctions, {{lines}} line segments, {{km}} km total.",
+    "resultSummaryWithServices": "{{junctions}} junctions, {{lines}} line segments, {{services}} service connections, {{km}} km total.",
     "resultTruncated": "Junction count was capped — try a larger spacing.",
+    "resultServicesTruncated": "Service connection count was capped — try a smaller project area.",
     "roadNoticeTitle": "Fetching road data",
     "roadNoticeDesc": "Generating a network sends the coordinates of your drawn project area to the public OpenStreetMap Overpass API, so the pipe network can follow real roads. No account or API key is needed, but the request goes to a shared public server."
   },

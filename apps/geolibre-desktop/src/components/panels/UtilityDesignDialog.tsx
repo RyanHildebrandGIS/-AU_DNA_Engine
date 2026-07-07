@@ -6,7 +6,11 @@ import {
   SKETCHES_SOURCE_KIND,
   startGeoEditorDrawMode,
 } from "@geolibre/plugins";
-import { generateNetwork, type NetworkSide } from "@geolibre/utility-network";
+import {
+  generateNetwork,
+  type NetworkCoverage,
+  type NetworkSide,
+} from "@geolibre/utility-network";
 import {
   Button,
   Dialog,
@@ -41,6 +45,7 @@ import {
 
 const DEFAULT_OFFSET_METERS = 3;
 const NETWORK_SIDES: NetworkSide[] = ["left", "right", "both"];
+const NETWORK_COVERAGES: NetworkCoverage[] = ["mainline", "mainlineAndServices"];
 
 const GEO_EDITOR_PLUGIN_ID = "maplibre-gl-geo-editor";
 const DEFAULT_SPACING_KM = 0.2;
@@ -58,10 +63,13 @@ const UTILITY_TYPES: UtilityType[] = [
 interface GeneratedResult {
   junctionsLayerId: string;
   linesLayerId: string;
+  servicesLayerId: string | null;
   junctionCount: number;
   lineCount: number;
+  serviceCount: number;
   totalKm: number;
   truncated: boolean;
+  servicesTruncated: boolean;
 }
 
 interface UtilityDesignDialogProps {
@@ -147,6 +155,7 @@ export function UtilityDesignDialog({
   const [spacingKm, setSpacingKm] = useState(DEFAULT_SPACING_KM);
   const [side, setSide] = useState<NetworkSide>("right");
   const [offsetMeters, setOffsetMeters] = useState(DEFAULT_OFFSET_METERS);
+  const [coverage, setCoverage] = useState<NetworkCoverage>("mainline");
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
@@ -302,10 +311,12 @@ export function UtilityDesignDialog({
         spacingKm,
         offsetMeters,
         side,
+        mode: coverage,
       });
       if (result) {
         removeLayer(result.junctionsLayerId);
         removeLayer(result.linesLayerId);
+        if (result.servicesLayerId) removeLayer(result.servicesLayerId);
       }
       const label = utilityType.charAt(0).toUpperCase() + utilityType.slice(1);
       const junctionsLayerId = addGeoJsonLayer(
@@ -316,6 +327,13 @@ export function UtilityDesignDialog({
         `${label} network lines`,
         generated.lines as unknown as FeatureCollection,
       );
+      const servicesLayerId =
+        generated.services.features.length > 0
+          ? addGeoJsonLayer(
+              `${label} services`,
+              generated.services as unknown as FeatureCollection,
+            )
+          : null;
       const totalKm = generated.lines.features.reduce(
         (sum, feature) => sum + feature.properties.length_km,
         0,
@@ -323,10 +341,13 @@ export function UtilityDesignDialog({
       setResult({
         junctionsLayerId,
         linesLayerId,
+        servicesLayerId,
         junctionCount: generated.junctions.features.length,
         lineCount: generated.lines.features.length,
+        serviceCount: generated.services.features.length,
         totalKm,
         truncated: generated.truncated,
+        servicesTruncated: generated.servicesTruncated,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -340,6 +361,7 @@ export function UtilityDesignDialog({
     spacingKm,
     offsetMeters,
     side,
+    coverage,
     result,
     addGeoJsonLayer,
     removeLayer,
@@ -553,6 +575,25 @@ export function UtilityDesignDialog({
 
           <Separator />
 
+          <div className="flex flex-col gap-1.5">
+            <Label className="font-medium">{t("utilityDesign.coverageTitle")}</Label>
+            <div className="pl-0">
+              <Select
+                value={coverage}
+                onChange={(e) => setCoverage(e.target.value as NetworkCoverage)}
+                className="max-w-[220px]"
+              >
+                {NETWORK_COVERAGES.map((c) => (
+                  <option key={c} value={c}>
+                    {t(`utilityDesign.coverage.${c}`)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          <Separator />
+
           <div className="flex flex-col gap-2">
             <Button
               disabled={!canGenerate}
@@ -569,12 +610,22 @@ export function UtilityDesignDialog({
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
             {result ? (
               <p className="text-xs text-muted-foreground">
-                {t("utilityDesign.resultSummary", {
-                  junctions: result.junctionCount,
-                  lines: result.lineCount,
-                  km: result.totalKm.toFixed(2),
-                })}
+                {result.servicesLayerId
+                  ? t("utilityDesign.resultSummaryWithServices", {
+                      junctions: result.junctionCount,
+                      lines: result.lineCount,
+                      services: result.serviceCount,
+                      km: result.totalKm.toFixed(2),
+                    })
+                  : t("utilityDesign.resultSummary", {
+                      junctions: result.junctionCount,
+                      lines: result.lineCount,
+                      km: result.totalKm.toFixed(2),
+                    })}
                 {result.truncated ? ` ${t("utilityDesign.resultTruncated")}` : ""}
+                {result.servicesTruncated
+                  ? ` ${t("utilityDesign.resultServicesTruncated")}`
+                  : ""}
               </p>
             ) : null}
           </div>

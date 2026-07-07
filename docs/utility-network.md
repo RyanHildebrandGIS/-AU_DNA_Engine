@@ -25,6 +25,24 @@ front doors.
    (shared trunk segments are emitted once, not duplicated per junction).
 5. **Offset** — each line is offset perpendicular to the road centerline by
    `offsetMeters`, to one or both sides (`side: "left" | "right" | "both"`).
+6. **Services** (`mode: "mainlineAndServices"` only) — fetches OSM building
+   footprints in the drawn area (`fetch-buildings.ts`, a second Overpass
+   query, `way["building"](poly:"...")`) and connects each one to the
+   already-offset mainline (`connect-services.ts`):
+   1. The building's centroid (`@turf/centroid`) is an approximate anchor.
+   2. `@turf/nearest-point-on-line` runs against every generated mainline
+      feature (both offset lines when `side: "both"`) to find the nearest
+      point overall — the main-side tap point. This naturally picks whichever
+      side's offset line is physically closer.
+   3. `@turf/nearest-point-on-line` runs again, this time against the
+      building's own footprint ring, using the tap point as the reference —
+      giving the building-side connection point on the footprint edge
+      closest to the main, not the centroid itself.
+   4. A 2-point service line is emitted between those two points.
+
+   Available for every utility type. Buildings beyond `maxServices` (default
+   500, same shape as `maxJunctions`) are dropped and reported via
+   `servicesTruncated`.
 
 ## Known simplifications
 
@@ -40,6 +58,15 @@ front doors.
   generation fails with a clear error rather than falling back to a floating
   grid (an earlier version of this tool laid out a raster grid + straight-line
   minimum spanning tree with no road awareness at all — replaced entirely).
+- **Service connections are ways-only** — buildings modeled as OSM
+  `relation`s (multipolygon buildings, e.g. ones with courtyards) are not
+  fetched, the same ways-only simplification already accepted for roads.
+- **Service connections are a two-step nearest-point approximation, not a
+  true mutual-nearest solve.** The main-side tap point is chosen using the
+  building's centroid as a stand-in for "where on the building we'll connect
+  from," which can pick a slightly different tap point than jointly
+  optimizing both ends at once would. A reasonable first pass, not a
+  network-design-grade solve.
 
 ## Explicitly out of scope
 

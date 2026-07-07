@@ -840,6 +840,12 @@ export function createAssistantTools(
         .describe(
           '"left" or "right" of the road centerline (in the direction each road segment was drawn), or "both" for a parallel line on each side. Defaults to "right".',
         ),
+      mode: z
+        .enum(["mainline", "mainlineAndServices"])
+        .optional()
+        .describe(
+          '"mainlineAndServices" also fetches OSM building footprints in the project area and connects each one to the mainline with a service line. Defaults to "mainline" (no service connections).',
+        ),
     }),
     callback: async (input) => {
       const areaLayerRef = input.areaLayer?.trim() || "Sketches";
@@ -872,6 +878,7 @@ export function createAssistantTools(
         spacingKm: input.spacingKm,
         offsetMeters: input.offsetMeters,
         side: input.side,
+        mode: input.mode,
       });
       const label =
         input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);
@@ -883,12 +890,22 @@ export function createAssistantTools(
         `${label} network lines`,
         result.lines as unknown as FeatureCollection,
       );
+      const servicesLayerId =
+        result.services.features.length > 0
+          ? store().addGeoJsonLayer(
+              `${label} services`,
+              result.services as unknown as FeatureCollection,
+            )
+          : undefined;
       return json({
         junctionsLayerId,
         linesLayerId,
+        servicesLayerId,
         junctionCount: result.junctions.features.length,
         lineCount: result.lines.features.length,
+        serviceCount: result.services.features.length,
         truncated: result.truncated,
+        servicesTruncated: result.servicesTruncated,
       });
     },
   });

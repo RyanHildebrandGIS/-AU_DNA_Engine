@@ -10,7 +10,10 @@ import type {
   Polygon,
   Position,
 } from "geojson";
-import { fetchOsmRoads, type FetchOsmRoadsOptions } from "./fetch-roads";
+import { connectBuildingsToLines } from "./connect-services";
+import { fetchOsmBuildings } from "./fetch-buildings";
+import { fetchOsmRoads } from "./fetch-roads";
+import type { OverpassFetchOptions } from "./overpass-client";
 import {
   buildRoadGraph,
   pathToRoot,
@@ -20,6 +23,7 @@ import {
 } from "./road-graph";
 
 export type NetworkSide = "left" | "right" | "both";
+export type NetworkCoverage = "mainline" | "mainlineAndServices";
 
 export interface GenerateNetworkOptions {
   /** Utility domain, carried through as a feature property (e.g. "water"). Layout is not yet domain-specific — see docs/utility-network.md. */
@@ -32,6 +36,10 @@ export interface GenerateNetworkOptions {
   offsetMeters?: number;
   /** Which side of the road centerline to offset to. "both" generates a parallel line on each side. Defaults to "right". */
   side?: NetworkSide;
+  /** "mainlineAndServices" also connects every building footprint in the area to the mainline. Defaults to "mainline". */
+  mode?: NetworkCoverage;
+  /** Safety cap on generated service connections. Defaults to 500. */
+  maxServices?: number;
 }
 
 export interface GeneratedNetwork {
@@ -40,46 +48,59 @@ export interface GeneratedNetwork {
     LineString,
     { id: string; utilityType: string; length_km: number; side: "left" | "right" }
   >;
+  /** Building-to-mainline service connections; empty unless mode is "mainlineAndServices". */
+  services: FeatureCollection<LineString, { id: string }>;
   /** True if the candidate junction count exceeded maxJunctions and was truncated. */
   truncated: boolean;
+  /** True if the building count exceeded maxServices and was truncated. */
+  servicesTruncated: boolean;
 }
 
 const DEFAULT_MAX_JUNCTIONS = 500;
 const DEFAULT_OFFSET_METERS = 3;
 const DEFAULT_SIDE: NetworkSide = "right";
+const DEFAULT_MODE: NetworkCoverage = "mainline";
 
 /**
  * Generates a road-following utility network inside `area`: junctions spaced
  * `spacingKm` apart along real road centerlines (fetched from OpenStreetMap
  * via Overpass), connected back to `source` by a shortest-path tree over the
  * real road graph, then offset `offsetMeters` to one or both sides of the
- * centerline. No domain rules yet (pipe sizing, slope, valve placement) — see
- * docs/utility-network.md.
+ * centerline. When `mode` is "mainlineAndServices", also fetches OSM building
+ * footprints and connects each one to the mainline. No domain rules yet (pipe
+ * sizing, slope, valve placement) — see docs/utility-network.md.
  *
- * Async: this fetches road data over the network. For a pure, synchronous,
- * unit-testable version that takes already-fetched road data, use
- * {@link generateNetworkFromRoads} directly.
+ * Async: this fetches road (and, in services mode, building) data over the
+ * network. For a pure, synchronous, unit-testable version that takes
+ * already-fetched data, use {@link generateNetworkFromRoads} directly.
  */
 export async function generateNetwork(
   area: Feature<Polygon | MultiPolygon>,
   source: Feature<Point>,
   options: GenerateNetworkOptions,
-  fetchOptions?: FetchOsmRoadsOptions,
+  fetchOptions?: OverpassFetchOptions,
 ): Promise<GeneratedNetwork> {
-  const roads = await fetchOsmRoads(area, fetchOptions);
-  return generateNetworkFromRoads(area, source, roads, options);
+  const [roads, buildings] = await Promise.all([
+    fetchOsmRoads(area, fetchOptions),
+    options.mode === "mainlineAndServices"
+      ? fetchOsmBuildings(area, fetchOptions)
+      : Promise.resolve(undefined),
+  ]);
+  return generateNetworkFromRoads(area, source, roads, options, buildings);
 }
 
 /**
  * Pure, synchronous core of {@link generateNetwork}: given already-fetched
- * road data, builds the network. See that function's doc comment for the
- * overall algorithm; this is the testable half with no network calls.
+ * road (and, in services mode, building) data, builds the network. See that
+ * function's doc comment for the overall algorithm; this is the testable
+ * half with no network calls.
  */
 export function generateNetworkFromRoads(
   _area: Feature<Polygon | MultiPolygon>,
   source: Feature<Point>,
   roads: FeatureCollection<LineString>,
   options: GenerateNetworkOptions,
+  buildings?: FeatureCollection<Polygon>,
 ): GeneratedNetwork {
   if (!Number.isFinite(options.spacingKm) || options.spacingKm <= 0) {
     throw new Error("spacingKm must be a positive number");
@@ -198,9 +219,21 @@ export function generateNetworkFromRoads(
     }
   }
 
+  const lines = featureCollection(lineFeatures);
+  const mode = options.mode ?? DEFAULT_MODE;
+  const { services, truncated: servicesTruncated } =
+    mode === "mainlineAndServices" && buildings
+      ? connectBuildingsToLines(buildings, lines, options.maxServices)
+      : {
+          services: featureCollection<LineString, { id: string }>([]),
+          truncated: false,
+        };
+
   return {
     junctions: featureCollection(junctionFeatures),
-    lines: featureCollection(lineFeatures),
+    lines,
+    services,
     truncated,
+    servicesTruncated,
   };
 }

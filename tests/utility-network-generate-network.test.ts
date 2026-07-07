@@ -4,7 +4,13 @@ import {
   generateNetwork,
   generateNetworkFromRoads,
 } from "@geolibre/utility-network";
-import type { Feature, FeatureCollection, LineString, Point, Polygon } from "geojson";
+import type {
+  Feature,
+  FeatureCollection,
+  LineString,
+  Point,
+  Polygon,
+} from "geojson";
 
 const AREA: Feature<Polygon> = {
   type: "Feature",
@@ -183,6 +189,56 @@ describe("generateNetworkFromRoads", () => {
   });
 });
 
+describe("generateNetworkFromRoads services mode", () => {
+  it("defaults to no service connections", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.equal(result.services.features.length, 0);
+    assert.equal(result.servicesTruncated, false);
+  });
+
+  it("connects buildings to the mainline when mode is mainlineAndServices", () => {
+    const mainlineOnly = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const [lon, lat] = mainlineOnly.lines.features[0].geometry.coordinates[0];
+    const building: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [lon + 0.0001, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0001],
+          ],
+        ],
+      },
+    };
+    const buildings: FeatureCollection<Polygon> = {
+      type: "FeatureCollection",
+      features: [building],
+    };
+
+    const result = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      { utilityType: "water", spacingKm: 0.3, mode: "mainlineAndServices" },
+      buildings,
+    );
+
+    assert.equal(result.services.features.length, 1);
+    assert.equal(result.servicesTruncated, false);
+  });
+});
+
 describe("generateNetwork (async wrapper)", () => {
   it("fetches roads then delegates to generateNetworkFromRoads", async (t) => {
     const fetchMock = t.mock.method(globalThis, "fetch", async () =>
@@ -206,5 +262,40 @@ describe("generateNetwork (async wrapper)", () => {
 
     assert.equal(fetchMock.mock.calls.length, 1);
     assert.ok(result.junctions.features.length > 0);
+  });
+
+  it("also fetches buildings when mode is mainlineAndServices", async (t) => {
+    const fetchMock = t.mock.method(
+      globalThis,
+      "fetch",
+      async (_url: string, init?: RequestInit) => {
+        const body = decodeURIComponent(
+          (init?.body as string).replace(/^data=/, ""),
+        );
+        if (body.includes('["building"]')) {
+          return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            elements: GRID_ROADS.features.map((f, i) => ({
+              type: "way",
+              id: i,
+              tags: { highway: "residential" },
+              geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+            })),
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const result = await generateNetwork(AREA, SOURCE, {
+      utilityType: "sewer",
+      spacingKm: 0.3,
+      mode: "mainlineAndServices",
+    });
+
+    assert.equal(fetchMock.mock.calls.length, 2);
+    assert.equal(result.services.features.length, 0);
   });
 });

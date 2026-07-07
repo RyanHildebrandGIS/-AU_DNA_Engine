@@ -3,9 +3,18 @@ export type {
   GenerateNetworkOptions,
   GeneratedNetwork,
   NetworkSide,
+  NetworkCoverage,
 } from "./generate-network";
-export { fetchOsmRoads, DEFAULT_OVERPASS_ENDPOINT } from "./fetch-roads";
+export { fetchOsmRoads } from "./fetch-roads";
 export type { FetchOsmRoadsOptions } from "./fetch-roads";
+export { fetchOsmBuildings } from "./fetch-buildings";
+export { connectBuildingsToLines } from "./connect-services";
+export type { ConnectServicesResult } from "./connect-services";
+export {
+  queryOverpassWays,
+  DEFAULT_OVERPASS_ENDPOINT,
+} from "./overpass-client";
+export type { OverpassFetchOptions } from "./overpass-client";
 export {
   buildRoadGraph,
   placeJunctionsAlongRoads,
