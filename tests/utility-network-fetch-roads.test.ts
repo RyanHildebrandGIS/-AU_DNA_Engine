@@ -73,10 +73,20 @@ describe("fetchOsmRoads", () => {
     ]);
   });
 
-  it("throws on a non-OK response", async (t) => {
+  it("throws on a non-retryable non-OK response", async (t) => {
+    t.mock.method(globalThis, "fetch", async () =>
+      new Response("bad request", { status: 400, statusText: "Bad Request" }),
+    );
+    await assert.rejects(() => fetchOsmRoads(AREA), /400/);
+  });
+
+  it("throws after exhausting retries on a persistent 429", async (t) => {
     t.mock.method(globalThis, "fetch", async () =>
       new Response("rate limited", { status: 429, statusText: "Too Many Requests" }),
     );
-    await assert.rejects(() => fetchOsmRoads(AREA), /429/);
+    await assert.rejects(
+      () => fetchOsmRoads(AREA, { retryDelaysMs: [0, 0] }),
+      /429/,
+    );
   });
 });

@@ -4,6 +4,9 @@ export type {
   GeneratedNetwork,
   NetworkSide,
   NetworkCoverage,
+  GenerateNetworkStage,
+  GenerateNetworkProgressEvent,
+  GenerateNetworkProgressCallback,
 } from "./generate-network";
 export { clipLineToArea } from "./clip-to-area";
 export { fetchOsmRoads } from "./fetch-roads";

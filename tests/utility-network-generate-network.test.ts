@@ -502,4 +502,68 @@ describe("generateNetwork (async wrapper)", () => {
     assert.equal(fetchMock.mock.calls.length, 2);
     assert.equal(result.services.features.length, 0);
   });
+
+  it("reports fetching -> building -> done via onProgress", async (t) => {
+    t.mock.method(globalThis, "fetch", async () =>
+      new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const events: { stage: string; retry?: unknown }[] = [];
+    await generateNetwork(
+      AREA,
+      SOURCE,
+      { utilityType: "water", spacingKm: 0.3 },
+      undefined,
+      (event) => events.push(event),
+    );
+
+    assert.deepEqual(
+      events.map((e) => e.stage),
+      ["fetching", "building", "done"],
+    );
+  });
+
+  it("reports a retry event through onProgress when Overpass returns a transient error", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      if (calls < 2) {
+        return new Response("bad gateway", { status: 502, statusText: "Bad Gateway" });
+      }
+      return new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      );
+    });
+
+    const events: { stage: string; retry?: { attempt: number; maxAttempts: number; status: number } }[] = [];
+    await generateNetwork(
+      AREA,
+      SOURCE,
+      { utilityType: "water", spacingKm: 0.3 },
+      { retryDelaysMs: [0, 0] },
+      (event) => events.push(event),
+    );
+
+    const retryEvent = events.find((e) => e.retry);
+    assert.ok(retryEvent, "expected a retry event");
+    assert.deepEqual(retryEvent!.retry, { attempt: 1, maxAttempts: 3, status: 502 });
+  });
 });

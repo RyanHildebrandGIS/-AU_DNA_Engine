@@ -17,6 +17,15 @@ front doors.
    excluded, since a utility mainline runs in the vehicle right-of-way, not a
    footpath. Returns a plain LineString `FeatureCollection`. This is the only
    network call; everything after this step is synchronous and local.
+   `queryOverpassWays` (`overpass-client.ts`, shared with the buildings fetch)
+   retries a 429/502/503/504 response up to twice with a short backoff before
+   giving up — the public Overpass instance is well known to intermittently
+   return these under load, so a request that would previously surface as
+   "Overpass request failed: 502 Bad Gateway" (requiring the user to manually
+   click Generate again) now recovers on its own most of the time.
+   `generateNetwork`'s optional 5th parameter, `onProgress`, reports real
+   stage checkpoints (`"fetching" | "building" | "done"`) plus these retry
+   attempts, driving `UtilityDesignDialog`'s `NetworkGenerationOverlay`.
 2. **Clip to the drawn area** (`clip-to-area.ts`) — Overpass's `poly:` filter
    matches any way that *intersects* the drawn polygon, not just the part
    inside it, so a fetched road commonly continues past the boundary the user

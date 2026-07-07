@@ -39,6 +39,53 @@ body,
   width: 100%;
 }
 
+/* Network-generation loading overlay (UtilityDesignDialog): three lines draw
+   themselves in and their endpoint nodes pulse in, one after another, looping
+   — a small animated stand-in for "junctions and pipe runs are being laid
+   out" rather than a generic spinner. */
+@keyframes geolibre-gen-draw-line {
+  0%,
+  15% {
+    stroke-dashoffset: 90;
+    opacity: 0.25;
+  }
+  50%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+@keyframes geolibre-gen-node-pulse {
+  0%,
+  15% {
+    transform: scale(0.35);
+    opacity: 0.35;
+  }
+  35%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.geolibre-gen-line {
+  stroke-dasharray: 90;
+  stroke-dashoffset: 90;
+  animation: geolibre-gen-draw-line 2.1s ease-in-out infinite;
+}
+.geolibre-gen-node {
+  animation: geolibre-gen-node-pulse 2.1s ease-in-out infinite;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .geolibre-gen-line,
+  .geolibre-gen-node {
+    animation: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transform: scale(1);
+  }
+}
+
 .geoagent-control .geoagent-control-icon svg {
   transform: translateX(1px);
 }

@@ -2066,7 +2066,13 @@
     "junctionsAtServiceTaps": "Add junctions at service connections",
     "generate": "Generate network",
     "generating": "Generating…",
-    "generatingOnMap": "Generating your network — this can take a few seconds.",
+    "progress": {
+      "title": "Generating your network",
+      "fetching": "Fetching road data from OpenStreetMap…",
+      "building": "Building junctions and pipe runs…",
+      "done": "Done!",
+      "retrying": "The map data server is busy — retrying ({{attempt}}/{{maxAttempts}})…"
+    },
     "regenerate": "Regenerate network",
     "resultSummary": "{{junctions}} junctions, {{lines}} line segments, {{km}} km total.",
     "resultSummaryWithServices": "{{junctions}} junctions, {{lines}} line segments, {{services}} service connections, {{km}} km total.",

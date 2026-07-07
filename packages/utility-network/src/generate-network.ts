@@ -44,6 +44,23 @@ export interface GenerateNetworkOptions {
   junctionsAtServiceTaps?: boolean;
 }
 
+/** Coarse stages of {@link generateNetwork}, for driving a progress UI —
+ * real checkpoints, not a fabricated percentage. */
+export type GenerateNetworkStage = "fetching" | "building" | "done";
+
+export interface GenerateNetworkProgressEvent {
+  stage: GenerateNetworkStage;
+  /** Present only alongside a retried Overpass request (see
+   * `OverpassFetchOptions.onRetry`) — surfaces transient upstream failures
+   * (429/502/503/504) so a loading UI can say "retrying" instead of stalling
+   * silently while the retry backoff runs. */
+  retry?: { attempt: number; maxAttempts: number; status: number };
+}
+
+export type GenerateNetworkProgressCallback = (
+  event: GenerateNetworkProgressEvent,
+) => void;
+
 export interface GeneratedNetwork {
   junctions: FeatureCollection<
     Point,
@@ -99,20 +116,37 @@ function junctionTypeLabel(utilityType: string): string {
  * Async: this fetches road (and, in services mode, building) data over the
  * network. For a pure, synchronous, unit-testable version that takes
  * already-fetched data, use {@link generateNetworkFromRoads} directly.
+ *
+ * `onProgress` reports real checkpoints (fetching -> building -> done) plus
+ * retry notifications when the public Overpass server returns a transient
+ * 429/502/503/504 — enough to drive a genuine progress UI without inventing
+ * a fake percentage.
  */
 export async function generateNetwork(
   area: Feature<Polygon | MultiPolygon>,
   source: Feature<Point>,
   options: GenerateNetworkOptions,
   fetchOptions?: OverpassFetchOptions,
+  onProgress?: GenerateNetworkProgressCallback,
 ): Promise<GeneratedNetwork> {
+  onProgress?.({ stage: "fetching" });
+  const fetchOptionsWithProgress: OverpassFetchOptions = {
+    ...fetchOptions,
+    onRetry: (attempt, maxAttempts, status) => {
+      fetchOptions?.onRetry?.(attempt, maxAttempts, status);
+      onProgress?.({ stage: "fetching", retry: { attempt, maxAttempts, status } });
+    },
+  };
   const [roads, buildings] = await Promise.all([
-    fetchOsmRoads(area, fetchOptions),
+    fetchOsmRoads(area, fetchOptionsWithProgress),
     options.mode === "mainlineAndServices"
-      ? fetchOsmBuildings(area, fetchOptions)
+      ? fetchOsmBuildings(area, fetchOptionsWithProgress)
       : Promise.resolve(undefined),
   ]);
-  return generateNetworkFromRoads(area, source, roads, options, buildings);
+  onProgress?.({ stage: "building" });
+  const result = generateNetworkFromRoads(area, source, roads, options, buildings);
+  onProgress?.({ stage: "done" });
+  return result;
 }
 
 /**

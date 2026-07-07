@@ -8,6 +8,7 @@ import {
 } from "@geolibre/plugins";
 import {
   generateNetwork,
+  type GenerateNetworkStage,
   type NetworkCoverage,
   type NetworkSide,
 } from "@geolibre/utility-network";
@@ -42,6 +43,10 @@ import {
   hasOsmRoadFetchConsent,
   recordOsmRoadFetchConsent,
 } from "../../lib/osm-road-fetch-consent";
+import {
+  NetworkGenerationOverlay,
+  type NetworkGenerationRetryInfo,
+} from "./NetworkGenerationOverlay";
 
 const DEFAULT_OFFSET_METERS = 3;
 const NETWORK_SIDES: NetworkSide[] = ["left", "right", "both"];
@@ -161,6 +166,8 @@ export function UtilityDesignDialog({
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [progressStage, setProgressStage] = useState<GenerateNetworkStage | null>(null);
+  const [progressRetry, setProgressRetry] = useState<NetworkGenerationRetryInfo | null>(null);
   const [consentNoticeOpen, setConsentNoticeOpen] = useState(false);
   const [result, setResult] = useState<GeneratedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -306,6 +313,8 @@ export function UtilityDesignDialog({
     if (!areaFeature || !source) return;
     setError(null);
     setGenerating(true);
+    setProgressStage("fetching");
+    setProgressRetry(null);
     switchToMapForAction();
     try {
       const sourceFeature: Feature<Point> = {
@@ -313,15 +322,24 @@ export function UtilityDesignDialog({
         properties: {},
         geometry: { type: "Point", coordinates: [source.lon, source.lat] },
       };
-      const generated = await generateNetwork(areaFeature, sourceFeature, {
-        utilityType,
-        spacingKm,
-        offsetMeters,
-        side,
-        mode: coverage,
-        junctionsAtServiceTaps:
-          coverage === "mainlineAndServices" ? junctionsAtServiceTaps : undefined,
-      });
+      const generated = await generateNetwork(
+        areaFeature,
+        sourceFeature,
+        {
+          utilityType,
+          spacingKm,
+          offsetMeters,
+          side,
+          mode: coverage,
+          junctionsAtServiceTaps:
+            coverage === "mainlineAndServices" ? junctionsAtServiceTaps : undefined,
+        },
+        undefined,
+        (event) => {
+          setProgressStage(event.stage);
+          setProgressRetry(event.retry ?? null);
+        },
+      );
       if (result) {
         removeLayer(result.junctionsLayerId);
         removeLayer(result.linesLayerId);
@@ -358,10 +376,15 @@ export function UtilityDesignDialog({
         truncated: generated.truncated,
         servicesTruncated: generated.servicesTruncated,
       });
+      // Let the overlay's "Done!" checkmark state linger for a beat instead
+      // of disappearing the instant the last progress event fires.
+      await new Promise((resolve) => setTimeout(resolve, 500));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setGenerating(false);
+      setProgressStage(null);
+      setProgressRetry(null);
       switchBackFromMapAction();
     }
   }, [
@@ -434,18 +457,17 @@ export function UtilityDesignDialog({
   // panel underneath it, not disappear the moment the panel does.
   return (
     <>
-      {drawingArea || picking || generating ? (
+      {drawingArea || picking ? (
         <div
           role="status"
           className="pointer-events-none fixed left-1/2 top-4 z-40 -translate-x-1/2 rounded-full border bg-background px-4 py-2 text-sm shadow-lg"
         >
           {drawingArea
             ? t("utilityDesign.step1Drawing")
-            : picking
-              ? t("utilityDesign.step3Picking")
-              : t("utilityDesign.generatingOnMap")}
+            : t("utilityDesign.step3Picking")}
         </div>
       ) : null}
+      <NetworkGenerationOverlay stage={progressStage} retry={progressRetry} />
       {mounted ? (
       <aside
         aria-label={t("utilityDesign.title")}
