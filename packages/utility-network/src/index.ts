@@ -5,6 +5,7 @@ export type {
   NetworkSide,
   NetworkCoverage,
 } from "./generate-network";
+export { clipLineToArea } from "./clip-to-area";
 export { fetchOsmRoads } from "./fetch-roads";
 export type { FetchOsmRoadsOptions } from "./fetch-roads";
 export { fetchOsmBuildings } from "./fetch-buildings";

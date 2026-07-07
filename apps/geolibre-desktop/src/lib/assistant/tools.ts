@@ -812,7 +812,7 @@ export function createAssistantTools(
   const generateUtilityNetwork = tool({
     name: "generate_utility_network",
     description:
-      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API; no domain-specific rules yet (pipe sizing, slope, valve placement).",
+      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API; no domain-specific rules yet (pipe sizing, slope, valve placement).",
     inputSchema: z.object({
       areaLayer: z
         .string()
@@ -845,6 +845,12 @@ export function createAssistantTools(
         .optional()
         .describe(
           '"mainlineAndServices" also fetches OSM building footprints in the project area and connects each one to the mainline with a service line. Defaults to "mainline" (no service connections).',
+        ),
+      junctionsAtServiceTaps: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also add a junction marker at every service's tap point on the mainline. Only applies when mode is \"mainlineAndServices\". Defaults to false.",
         ),
     }),
     callback: async (input) => {
@@ -879,6 +885,7 @@ export function createAssistantTools(
         offsetMeters: input.offsetMeters,
         side: input.side,
         mode: input.mode,
+        junctionsAtServiceTaps: input.junctionsAtServiceTaps,
       });
       const label =
         input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);

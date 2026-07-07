@@ -10,13 +10,13 @@ import type {
   Polygon,
   Position,
 } from "geojson";
+import { clipLineToArea } from "./clip-to-area";
 import { connectBuildingsToLines } from "./connect-services";
 import { fetchOsmBuildings } from "./fetch-buildings";
 import { fetchOsmRoads } from "./fetch-roads";
 import type { OverpassFetchOptions } from "./overpass-client";
 import {
   buildRoadGraph,
-  pathToRoot,
   placeJunctionsAlongRoads,
   shortestPathTree,
   snapToNearestNode,
@@ -40,6 +40,8 @@ export interface GenerateNetworkOptions {
   mode?: NetworkCoverage;
   /** Safety cap on generated service connections. Defaults to 500. */
   maxServices?: number;
+  /** Also add a junction marker at every service's tap point on the mainline. Only applies when mode is "mainlineAndServices". Defaults to false. */
+  junctionsAtServiceTaps?: boolean;
 }
 
 export interface GeneratedNetwork {
@@ -64,8 +66,9 @@ const DEFAULT_MODE: NetworkCoverage = "mainline";
 /**
  * Generates a road-following utility network inside `area`: junctions spaced
  * `spacingKm` apart along real road centerlines (fetched from OpenStreetMap
- * via Overpass), connected back to `source` by a shortest-path tree over the
- * real road graph, then offset `offsetMeters` to one or both sides of the
+ * via Overpass, then clipped to `area` so the network never extends past the
+ * drawn boundary), connected back to `source` by a shortest-path tree over
+ * the real road graph, then offset `offsetMeters` to one or both sides of the
  * centerline. When `mode` is "mainlineAndServices", also fetches OSM building
  * footprints and connects each one to the mainline. No domain rules yet (pipe
  * sizing, slope, valve placement) — see docs/utility-network.md.
@@ -96,7 +99,7 @@ export async function generateNetwork(
  * half with no network calls.
  */
 export function generateNetworkFromRoads(
-  _area: Feature<Polygon | MultiPolygon>,
+  area: Feature<Polygon | MultiPolygon>,
   source: Feature<Point>,
   roads: FeatureCollection<LineString>,
   options: GenerateNetworkOptions,
@@ -105,52 +108,80 @@ export function generateNetworkFromRoads(
   if (!Number.isFinite(options.spacingKm) || options.spacingKm <= 0) {
     throw new Error("spacingKm must be a positive number");
   }
-  if (roads.features.length === 0) {
-    throw new Error("No roads found in this project area");
-  }
   const maxJunctions = options.maxJunctions ?? DEFAULT_MAX_JUNCTIONS;
   const offsetMeters = options.offsetMeters ?? DEFAULT_OFFSET_METERS;
   const side = options.side ?? DEFAULT_SIDE;
 
-  const graph = buildRoadGraph(roads);
-  const rootNode = snapToNearestNode(graph, source.geometry.coordinates);
-
-  const candidateNodes = placeJunctionsAlongRoads(roads, options.spacingKm).map(
-    (coord) => snapToNearestNode(graph, coord),
-  );
-  let junctionNodes = [...new Set(candidateNodes)].filter(
-    (node) => node !== rootNode,
-  );
-
-  const truncated = junctionNodes.length > maxJunctions;
-  if (truncated) junctionNodes = junctionNodes.slice(0, maxJunctions);
-
-  const tree = shortestPathTree(graph, rootNode);
-  junctionNodes = junctionNodes.filter(
-    (node) => tree.distanceKm[node] !== Infinity,
-  );
-
-  // Children (tree-parent -> child) restricted to nodes that actually lie on
-  // some junction's path back to the source, so shared trunk sections are
-  // walked once rather than once per junction.
-  const childrenOf = new Map<number, Set<number>>();
-  for (const junctionNode of junctionNodes) {
-    const path = pathToRoot(tree, junctionNode);
-    for (let i = 0; i < path.length - 1; i++) {
-      const [parent, child] = [path[i], path[i + 1]];
-      let children = childrenOf.get(parent);
-      if (!children) {
-        children = new Set();
-        childrenOf.set(parent, children);
-      }
-      children.add(child);
-    }
+  // Fetched OSM ways commonly continue past the drawn project-area boundary
+  // (Overpass's poly: filter matches any way that intersects the area, not
+  // just the part inside it) — clip every road to the area first so the
+  // whole downstream network (graph, junctions, chains) never extends past
+  // what the user actually drew.
+  const clippedRoads: FeatureCollection<LineString> = {
+    type: "FeatureCollection",
+    features: roads.features.flatMap((feature) =>
+      clipLineToArea(feature.geometry.coordinates, area).map((coords) =>
+        lineString(coords, feature.properties ?? {}),
+      ),
+    ),
+  };
+  if (clippedRoads.features.length === 0) {
+    throw new Error("No roads found in this project area");
   }
+
+  const graph = buildRoadGraph(clippedRoads);
+  const rootNode = snapToNearestNode(graph, source.geometry.coordinates);
+  const tree = shortestPathTree(graph, rootNode);
+
+  // Full branching structure of the network reachable from the source —
+  // every node's tree children, not just the ones on a path to a
+  // spacing-based candidate junction. This is what lets a junction marker
+  // land on every real intersection/dead-end, not only the ones a spacing
+  // candidate happened to snap to (previously: a mainline could visibly
+  // split at a real intersection with no junction dot there at all).
+  const childrenOf = new Map<number, Set<number>>();
+  for (let node = 0; node < graph.nodes.length; node++) {
+    if (node === rootNode || tree.distanceKm[node] === Infinity) continue;
+    const parent = tree.parent[node];
+    let children = childrenOf.get(parent);
+    if (!children) {
+      children = new Set();
+      childrenOf.set(parent, children);
+    }
+    children.add(node);
+  }
+
+  // Real intersections (>1 child) and dead-ends (0 children) always deserve
+  // a junction marker — they're structurally where pipes actually join or
+  // terminate, regardless of spacing.
+  const branchNodes = [...childrenOf.entries()]
+    .filter(([node, children]) => node !== rootNode && children.size !== 1)
+    .map(([node]) => node);
+
+  const candidateNodes = placeJunctionsAlongRoads(clippedRoads, options.spacingKm)
+    .map((coord) => snapToNearestNode(graph, coord))
+    .filter((node) => node !== rootNode && tree.distanceKm[node] !== Infinity);
+
+  const requiredNodes = new Set(branchNodes);
+  const allCandidates = [...new Set([...branchNodes, ...candidateNodes])];
+
+  const truncated = allCandidates.length > maxJunctions;
+  let junctionNodes = allCandidates;
+  if (truncated) {
+    // Real intersections are required, not optional — if the cap forces a
+    // choice, drop spacing-only candidates first.
+    const required = allCandidates.filter((node) => requiredNodes.has(node));
+    const optional = allCandidates.filter((node) => !requiredNodes.has(node));
+    junctionNodes = [...required, ...optional].slice(0, maxJunctions);
+  }
+
   const junctionNodeSet = new Set(junctionNodes);
   // A node ends a continuous chain (rather than just passing through) when
   // it's a junction, or the real road network branches there (more than one
   // child) or dead-ends there (no children) — every other node just carries
-  // the chain's geometry through it without splitting the line.
+  // the chain's geometry through it without splitting the line. Checked
+  // independently of junctionNodeSet so a real branch still splits the line
+  // even if maxJunctions truncated its marker away.
   const isDecisionPoint = (node: number): boolean =>
     node === rootNode ||
     junctionNodeSet.has(node) ||
@@ -221,16 +252,33 @@ export function generateNetworkFromRoads(
 
   const lines = featureCollection(lineFeatures);
   const mode = options.mode ?? DEFAULT_MODE;
-  const { services, truncated: servicesTruncated } =
+  const { services, tapPoints, truncated: servicesTruncated } =
     mode === "mainlineAndServices" && buildings
       ? connectBuildingsToLines(buildings, lines, options.maxServices)
       : {
           services: featureCollection<LineString, { id: string }>([]),
+          tapPoints: [] as Feature<Point>[],
           truncated: false,
         };
 
+  // Optional: a service's tap point is a real fitting on the main, so it can
+  // get its own junction marker too, distinct from the road-spacing/branch
+  // junctions above.
+  const allJunctionFeatures =
+    mode === "mainlineAndServices" && options.junctionsAtServiceTaps
+      ? [
+          ...junctionFeatures,
+          ...tapPoints.map((tapPoint, i) =>
+            point(tapPoint.geometry.coordinates, {
+              id: `service-junction-${i + 1}`,
+              utilityType: options.utilityType,
+            }),
+          ),
+        ]
+      : junctionFeatures;
+
   return {
-    junctions: featureCollection(junctionFeatures),
+    junctions: featureCollection(allJunctionFeatures),
     lines,
     services,
     truncated,

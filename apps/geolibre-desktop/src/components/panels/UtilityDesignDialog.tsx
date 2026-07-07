@@ -156,6 +156,7 @@ export function UtilityDesignDialog({
   const [side, setSide] = useState<NetworkSide>("right");
   const [offsetMeters, setOffsetMeters] = useState(DEFAULT_OFFSET_METERS);
   const [coverage, setCoverage] = useState<NetworkCoverage>("mainline");
+  const [junctionsAtServiceTaps, setJunctionsAtServiceTaps] = useState(false);
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
@@ -312,6 +313,8 @@ export function UtilityDesignDialog({
         offsetMeters,
         side,
         mode: coverage,
+        junctionsAtServiceTaps:
+          coverage === "mainlineAndServices" ? junctionsAtServiceTaps : undefined,
       });
       if (result) {
         removeLayer(result.junctionsLayerId);
@@ -362,6 +365,7 @@ export function UtilityDesignDialog({
     offsetMeters,
     side,
     coverage,
+    junctionsAtServiceTaps,
     result,
     addGeoJsonLayer,
     removeLayer,
@@ -577,7 +581,7 @@ export function UtilityDesignDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label className="font-medium">{t("utilityDesign.coverageTitle")}</Label>
-            <div className="pl-0">
+            <div className="flex flex-col gap-2 pl-0">
               <Select
                 value={coverage}
                 onChange={(e) => setCoverage(e.target.value as NetworkCoverage)}
@@ -589,6 +593,16 @@ export function UtilityDesignDialog({
                   </option>
                 ))}
               </Select>
+              {coverage === "mainlineAndServices" ? (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={junctionsAtServiceTaps}
+                    onChange={(e) => setJunctionsAtServiceTaps(e.target.checked)}
+                  />
+                  {t("utilityDesign.junctionsAtServiceTaps")}
+                </label>
+              ) : null}
             </div>
           </div>
 

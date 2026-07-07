@@ -2060,6 +2060,7 @@
       "mainline": "Mainline only",
       "mainlineAndServices": "Mainline + services"
     },
+    "junctionsAtServiceTaps": "Add junctions at service connections",
     "generate": "Generate network",
     "generating": "Generating…",
     "regenerate": "Regenerate network",

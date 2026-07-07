@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "@turf/along": "^7.3.5",
+    "@turf/boolean-point-in-polygon": "^7.3.5",
     "@turf/centroid": "^7.3.5",
     "@turf/distance": "^7.3.5",
     "@turf/helpers": "^7.3.5",
     "@turf/length": "^7.3.5",
+    "@turf/line-intersect": "^7.3.5",
     "@turf/line-offset": "^7.3.5",
     "@turf/nearest-point-on-line": "^7.3.5"
   },

@@ -12,6 +12,11 @@ import type {
 
 export interface ConnectServicesResult {
   services: FeatureCollection<LineString, { id: string }>;
+  /** Main-side tap point for each service, same order as `services.features`
+   * — the point on the mainline each service connects to. Callers can turn
+   * these into junction markers (see `junctionsAtServiceTaps` in
+   * generate-network.ts) since a real tap is a real fitting on the main. */
+  tapPoints: Feature<Point>[];
   truncated: boolean;
 }
 
@@ -37,6 +42,7 @@ export function connectBuildingsToLines(
     : buildings.features;
 
   const services: Feature<LineString, { id: string }>[] = [];
+  const tapPoints: Feature<Point>[] = [];
   let serviceId = 1;
   for (const building of used) {
     if (lines.features.length === 0) break;
@@ -71,7 +77,8 @@ export function connectBuildingsToLines(
         { id: `service-${serviceId++}` },
       ),
     );
+    tapPoints.push(mainPoint);
   }
 
-  return { services: featureCollection(services), truncated };
+  return { services: featureCollection(services), tapPoints, truncated };
 }

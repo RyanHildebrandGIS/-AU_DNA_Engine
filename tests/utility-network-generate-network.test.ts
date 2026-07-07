@@ -187,6 +187,89 @@ describe("generateNetworkFromRoads", () => {
       /No roads found/,
     );
   });
+
+  it("places a junction at a real intersection even when spacing skips over it", () => {
+    // A plus-shaped intersection at (0.005, 0.005), shared by a horizontal
+    // and a vertical road. spacingKm is set far larger than either road's
+    // length, so placeJunctionsAlongRoads only ever samples each road's very
+    // first vertex — the real intersection is never a spacing candidate,
+    // yet it's a genuine 4-way branch and must still get a junction marker
+    // (previously: the mainline visibly split there with no junction dot).
+    const crossRoads: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0.005],
+              [0.005, 0.005],
+              [0.01, 0.005],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0.005, 0],
+              [0.005, 0.005],
+              [0.005, 0.01],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      sourcePoint([0, 0.005]),
+      crossRoads,
+      { utilityType: "water", spacingKm: 10 },
+    );
+    const hasJunctionAtIntersection = result.junctions.features.some(
+      (f) =>
+        Math.abs(f.geometry.coordinates[0] - 0.005) < 1e-9 &&
+        Math.abs(f.geometry.coordinates[1] - 0.005) < 1e-9,
+    );
+    assert.ok(
+      hasJunctionAtIntersection,
+      "expected a junction marker at the real 4-way intersection",
+    );
+  });
+
+  it("clips generated lines to the drawn area, even when roads extend past it", () => {
+    const smallArea: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [-0.001, -0.001],
+            [-0.001, 0.006],
+            [0.006, 0.006],
+            [0.006, -0.001],
+            [-0.001, -0.001],
+          ],
+        ],
+      },
+    };
+    const result = generateNetworkFromRoads(smallArea, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.ok(result.lines.features.length > 0);
+    for (const line of result.lines.features) {
+      for (const [lon, lat] of line.geometry.coordinates) {
+        assert.ok(lon <= 0.006 + 1e-4, `lon ${lon} should not exceed the drawn area`);
+        assert.ok(lat <= 0.006 + 1e-4, `lat ${lat} should not exceed the drawn area`);
+      }
+    }
+  });
 });
 
 describe("generateNetworkFromRoads services mode", () => {
@@ -236,6 +319,57 @@ describe("generateNetworkFromRoads services mode", () => {
 
     assert.equal(result.services.features.length, 1);
     assert.equal(result.servicesTruncated, false);
+  });
+
+  it("adds a junction marker at each service tap point when junctionsAtServiceTaps is set", () => {
+    const mainlineOnly = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const [lon, lat] = mainlineOnly.lines.features[0].geometry.coordinates[0];
+    const building: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [lon + 0.0001, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0001],
+          ],
+        ],
+      },
+    };
+    const buildings: FeatureCollection<Polygon> = {
+      type: "FeatureCollection",
+      features: [building],
+    };
+    const withoutOption = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      { utilityType: "water", spacingKm: 0.3, mode: "mainlineAndServices" },
+      buildings,
+    );
+    const withOption = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      {
+        utilityType: "water",
+        spacingKm: 0.3,
+        mode: "mainlineAndServices",
+        junctionsAtServiceTaps: true,
+      },
+      buildings,
+    );
+    assert.equal(
+      withOption.junctions.features.length,
+      withoutOption.junctions.features.length + 1,
+    );
   });
 });
 

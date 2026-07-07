@@ -32,7 +32,7 @@ const BUILDING = polygon(
 describe("connectBuildingsToLines", () => {
   it("connects a building's nearest footprint edge to the nearest point on the mainline", () => {
     const buildings = featureCollection([BUILDING]);
-    const { services, truncated } = connectBuildingsToLines(buildings, LINES);
+    const { services, tapPoints, truncated } = connectBuildingsToLines(buildings, LINES);
 
     assert.equal(truncated, false);
     assert.equal(services.features.length, 1);
@@ -48,6 +48,10 @@ describe("connectBuildingsToLines", () => {
       Math.abs(buildingEnd[0] - 0.001) < 1e-6 || Math.abs(buildingEnd[0] - 0.002) < 1e-6,
       `building-side endpoint should be on the footprint edge, got ${buildingEnd}`,
     );
+
+    // tapPoints exposes the same main-side connection point, in service order.
+    assert.equal(tapPoints.length, 1);
+    assert.deepEqual(tapPoints[0].geometry.coordinates, mainEnd);
   });
 
   it("truncates beyond maxServices and reports it", () => {
