@@ -10,9 +10,13 @@ front doors.
 
 1. **Fetch roads** (`fetch-roads.ts`) — queries the public
    [Overpass API](https://overpass-api.de) for OSM road centerlines within the
-   drawn polygon (`way["highway"](poly:"...")`), returning a plain LineString
-   `FeatureCollection`. This is the only network call; everything after this
-   step is synchronous and local.
+   drawn polygon, restricted to drivable highway classes via a regex value
+   filter (`way["highway"~"^(motorway|trunk|primary|secondary|tertiary|
+   unclassified|residential|living_street|service|...|_link variants)$"]
+   (poly:"...")`) — footways, cycleways, paths, tracks, and steps are
+   excluded, since a utility mainline runs in the vehicle right-of-way, not a
+   footpath. Returns a plain LineString `FeatureCollection`. This is the only
+   network call; everything after this step is synchronous and local.
 2. **Clip to the drawn area** (`clip-to-area.ts`) — Overpass's `poly:` filter
    matches any way that *intersects* the drawn polygon, not just the part
    inside it, so a fetched road commonly continues past the boundary the user
@@ -33,12 +37,27 @@ front doors.
      dot there, not just wherever a spacing candidate happened to land.
    Both are subject to `maxJunctions`; if the cap forces a choice, real
    intersections are kept and spacing-only candidates are dropped first.
+   Every junction feature carries a `junctionType` property — the standard
+   industry name for that utility's junction structure (water → "Valve",
+   sewer → "Manhole", stormwater → "Catch Basin", electric → "Vault",
+   fiber → "Handhole", anything else → generic "Junction"). A simple
+   utility-based lookup for now (`JUNCTION_TYPE_LABELS` in
+   `generate-network.ts`), not a rules-driven pick between e.g. a dead-end
+   and a real intersection.
 5. **Connect to source** — Dijkstra's algorithm from the source node produces
    a shortest-path tree over the real road graph; the union of every edge
    along every junction's path back to the source becomes the line network
    (shared trunk segments are emitted once, not duplicated per junction).
 6. **Offset** — each line is offset perpendicular to the road centerline by
-   `offsetMeters`, to one or both sides (`side: "left" | "right" | "both"`).
+   `offsetMeters`, to one or both sides (`side: "left" | "right" | "both"`),
+   then **anchored back to the true (unoffset) junction/decision-point
+   location at both of its endpoints**. Without this, an offset line runs
+   parallel to the centerline for its whole length and never actually
+   touches the junction marker sitting on the true on-road point, and two
+   chains sharing a node would each be offset independently, leaving a
+   visible gap right at the junction instead of meeting there. Every
+   generated line's endpoints are therefore guaranteed to exactly match a
+   junction (or the source) — connectivity, not just visual proximity.
 7. **Services** (`mode: "mainlineAndServices"` only) — fetches OSM building
    footprints in the drawn area (`fetch-buildings.ts`, a second Overpass
    query, `way["building"](poly:"...")`) and connects each one to the
@@ -70,9 +89,11 @@ front doors.
   junctions at exact regular intervals; snapping means a junction can be off
   by up to half the distance between two real road vertices. A reasonable
   first pass, not pixel-perfect.
-- **Junction markers are not offset** — only the connecting lines are shifted
-  to the side of the road. Offsetting junction points too would need
-  projecting them onto the offset line, which is out of scope for now.
+- **Junction markers themselves are not offset** — they stay at the true
+  on-road point, matching the anchor point each connecting line's endpoints
+  snap back to (see step 6 above). This is what actually makes them connect;
+  it just means a junction marker sits exactly on the centerline rather than
+  to the side of it, even though the pipe run passing through it is offset.
 - **Area clipping is vertex-level, not true segment/polygon boundary
   counting** — a road segment that dips outside the drawn area and back in
   without either endpoint actually leaving the area (a very sharp concave

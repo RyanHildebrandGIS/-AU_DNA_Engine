@@ -65,11 +65,43 @@ describe("generateNetworkFromRoads", () => {
     assert.equal(result.truncated, false);
     for (const junction of result.junctions.features) {
       assert.equal(junction.properties.utilityType, "water");
+      assert.equal(junction.properties.junctionType, "Valve");
     }
     for (const line of result.lines.features) {
       assert.equal(line.geometry.type, "LineString");
       assert.ok(line.properties.length_km >= 0);
       assert.equal(line.properties.side, "right");
+    }
+  });
+
+  it("gives every utility type its standard junction name", () => {
+    const expected: Record<string, string> = {
+      water: "Valve",
+      sewer: "Manhole",
+      stormwater: "Catch Basin",
+      electric: "Vault",
+      fiber: "Handhole",
+    };
+    for (const [utilityType, label] of Object.entries(expected)) {
+      const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType,
+        spacingKm: 0.3,
+      });
+      assert.ok(result.junctions.features.length > 0);
+      for (const junction of result.junctions.features) {
+        assert.equal(junction.properties.junctionType, label);
+      }
+    }
+  });
+
+  it('falls back to a generic "Junction" label for an unrecognized utility type', () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "gas",
+      spacingKm: 0.3,
+    });
+    assert.ok(result.junctions.features.length > 0);
+    for (const junction of result.junctions.features) {
+      assert.equal(junction.properties.junctionType, "Junction");
     }
   });
 
@@ -79,14 +111,46 @@ describe("generateNetworkFromRoads", () => {
       spacingKm: 0.3,
     });
     for (const line of result.lines.features) {
-      // An offset line's coordinates should not exactly match either
-      // endpoint of a raw grid edge (all grid coordinates are exact
-      // multiples of 0.005) — a loose but effective proxy for "this was
-      // actually shifted, not left on the centerline".
-      const [lon, lat] = line.geometry.coordinates[0];
+      // The line's endpoints are deliberately anchored back to the true
+      // (on-grid) junction location — see the connectivity fix below — so
+      // only an INTERIOR coordinate proves the line was actually offset,
+      // not left running exactly on the centerline for its whole length.
+      assert.ok(
+        line.geometry.coordinates.length > 2,
+        "expected at least one interior (offset) coordinate between the anchored endpoints",
+      );
+      const [lon, lat] = line.geometry.coordinates[1];
       const onGridLattice =
         Math.abs(lon % 0.005) < 1e-9 && Math.abs(lat % 0.005) < 1e-9;
-      assert.ok(!onGridLattice, "offset line should not sit exactly on the raw grid");
+      assert.ok(!onGridLattice, "the interior of the line should not sit exactly on the raw grid");
+    }
+  });
+
+  it("anchors every line's endpoints to the true (unoffset) junction/decision-point location", () => {
+    // Real connectivity requirement: a line must actually touch the
+    // junction markers at both ends, not just run parallel nearby — and two
+    // chains sharing a node must meet at the exact same coordinate.
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const junctionCoordKeys = new Set(
+      result.junctions.features.map((f) => f.geometry.coordinates.join(",")),
+    );
+    // The source/root node also anchors lines but has no junction marker of
+    // its own — SOURCE is [0, 0], the road grid's own origin vertex.
+    junctionCoordKeys.add("0,0");
+    for (const line of result.lines.features) {
+      const first = line.geometry.coordinates[0];
+      const last = line.geometry.coordinates[line.geometry.coordinates.length - 1];
+      assert.ok(
+        junctionCoordKeys.has(first.join(",")),
+        `line start ${first} should exactly match a junction or the source`,
+      );
+      assert.ok(
+        junctionCoordKeys.has(last.join(",")),
+        `line end ${last} should exactly match a junction or the source`,
+      );
     }
   });
 
@@ -148,7 +212,8 @@ describe("generateNetworkFromRoads", () => {
     );
     assert.equal(result.junctions.features.length, 1);
     assert.equal(result.lines.features.length, 1);
-    assert.equal(result.lines.features[0].geometry.coordinates.length, 5);
+    // 5 offset vertices plus the 2 anchored (true, unoffset) endpoints.
+    assert.equal(result.lines.features[0].geometry.coordinates.length, 7);
   });
 
   it("truncates and reports it when junctions exceed maxJunctions", () => {
@@ -370,6 +435,11 @@ describe("generateNetworkFromRoads services mode", () => {
       withOption.junctions.features.length,
       withoutOption.junctions.features.length + 1,
     );
+    const serviceJunction = withOption.junctions.features.find((f) =>
+      f.properties.id.startsWith("service-junction-"),
+    );
+    assert.ok(serviceJunction, "expected a service-junction feature");
+    assert.equal(serviceJunction!.properties.junctionType, "Valve");
   });
 });
 

@@ -32,7 +32,10 @@ describe("fetchOsmRoads", () => {
 
     assert.ok(capturedBody, "expected a request body");
     const decoded = decodeURIComponent(capturedBody!.replace(/^data=/, ""));
-    assert.match(decoded, /way\["highway"\]\(poly:"/);
+    // Restricted to drivable highway classes (no footway/path/cycleway/etc.)
+    // via a regex value filter, not a bare ["highway"] presence filter.
+    assert.match(decoded, /way\["highway"~"\^\(.*residential.*\)\$"\]\(poly:"/);
+    assert.doesNotMatch(decoded, /footway|cycleway|\bpath\b|steps/);
     // Overpass poly: filter is "lat lon" pairs — the first ring vertex is
     // [-97.2, 49.85] in [lon, lat], so it must appear as "49.85 -97.2".
     assert.match(decoded, /49\.85 -97\.2/);

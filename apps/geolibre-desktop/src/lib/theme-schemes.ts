@@ -250,3 +250,19 @@ export function applyThemeScheme(
     root.setAttribute("data-theme", scheme);
   }
 }
+
+/**
+ * The live `--primary` accent color as a CSS `hsl(...)` string, read off
+ * `<html>` at call time. For consumers that can't just write `hsl(var(--primary))`
+ * in CSS — MapLibre GL paint properties don't resolve CSS custom properties,
+ * so anything drawn as a map layer (rather than styled with a stylesheet)
+ * needs the resolved color instead. Falls back to the default Claude-orange
+ * scheme's value outside a browser context.
+ */
+export function getCurrentAccentColor(): string {
+  if (typeof document === "undefined") return "hsl(14.8 63.1% 59.6%)";
+  const channels = getComputedStyle(document.documentElement)
+    .getPropertyValue("--primary")
+    .trim();
+  return channels ? `hsl(${channels})` : "hsl(14.8 63.1% 59.6%)";
+}

@@ -12,6 +12,7 @@ import type {
   Map as MapLibreMap,
   MapMouseEvent,
 } from "maplibre-gl";
+import { getCurrentAccentColor } from "./theme-schemes";
 
 /** A geographic bounding box as `[west, south, east, north]`. */
 export type PrintExtent = [number, number, number, number];
@@ -50,12 +51,16 @@ function extentToFeature(extent: PrintExtent): GeoJSON.Feature<GeoJSON.Polygon> 
 
 /** Add the fill/line layers for the extent source if they are not present. */
 function ensurePrintExtentLayers(map: MapLibreMap): void {
+  // MapLibre paint properties can't resolve CSS custom properties, so the
+  // live accent color has to be read and resolved to a literal color here
+  // rather than written as `hsl(var(--primary))` in a stylesheet.
+  const accentColor = getCurrentAccentColor();
   if (!map.getLayer(FILL_LAYER_ID)) {
     map.addLayer({
       id: FILL_LAYER_ID,
       type: "fill",
       source: SOURCE_ID,
-      paint: { "fill-color": "#2563eb", "fill-opacity": 0.12 },
+      paint: { "fill-color": accentColor, "fill-opacity": 0.12 },
     });
   }
   if (!map.getLayer(LINE_LAYER_ID)) {
@@ -64,7 +69,7 @@ function ensurePrintExtentLayers(map: MapLibreMap): void {
       type: "line",
       source: SOURCE_ID,
       paint: {
-        "line-color": "#2563eb",
+        "line-color": accentColor,
         "line-width": 2,
         "line-dasharray": [3, 2],
       },

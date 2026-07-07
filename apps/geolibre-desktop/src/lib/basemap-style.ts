@@ -45,8 +45,8 @@ const BASEMAP_SELECT_FIXES = `
 
 .basemap-control-panel .basemap-select-proxy:focus-visible,
 .basemap-control-panel .basemap-select-proxy.is-open {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.14);
   outline: none;
 }
 
@@ -90,8 +90,8 @@ const BASEMAP_SELECT_FIXES = `
 }
 
 .basemap-select-menu button.is-selected {
-  background: #2563eb;
-  color: #fff;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 `;
 

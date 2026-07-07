@@ -280,18 +280,21 @@ export function UtilityDesignDialog({
   }, [picking, getMap, switchBackFromMapAction]);
 
   // Show a temporary marker for the picked source point (not a saved layer).
+  // A native title tooltip on hover clarifies what the pin represents, since
+  // otherwise it's an unlabeled red dot on the map.
   useEffect(() => {
     const map = getMap();
     if (!map || !source) return;
     const marker = new maplibregl.Marker({ color: "#c0392b" })
       .setLngLat([source.lon, source.lat])
       .addTo(map);
+    marker.getElement().title = t("utilityDesign.sourceMarkerTooltip");
     markerRef.current = marker;
     return () => {
       marker.remove();
       if (markerRef.current === marker) markerRef.current = null;
     };
-  }, [source, getMap]);
+  }, [source, getMap, t]);
 
   const canGenerate = Boolean(areaFeature) && Boolean(source) && !generating;
 
@@ -422,20 +425,28 @@ export function UtilityDesignDialog({
     return () => clearTimeout(timeout);
   }, [active, isMobile]);
 
-  if (!mounted) return null;
-
   // `bottom-16` (not `bottom-0`) leaves room for PrimaryNav's h-16 bottom tab
   // bar on narrow viewports, so this bottom sheet doesn't cover it.
+  //
+  // The status pill is NOT gated by `mounted`: switching to the Map tab for
+  // an action is exactly when this panel unmounts (on mobile) — that's the
+  // whole point of the pill, so it must keep rendering independently of the
+  // panel underneath it, not disappear the moment the panel does.
   return (
     <>
-      {drawingArea ? (
+      {drawingArea || picking || generating ? (
         <div
           role="status"
           className="pointer-events-none fixed left-1/2 top-4 z-40 -translate-x-1/2 rounded-full border bg-background px-4 py-2 text-sm shadow-lg"
         >
-          {t("utilityDesign.step1Drawing")}
+          {drawingArea
+            ? t("utilityDesign.step1Drawing")
+            : picking
+              ? t("utilityDesign.step3Picking")
+              : t("utilityDesign.generatingOnMap")}
         </div>
       ) : null}
+      {mounted ? (
       <aside
         aria-label={t("utilityDesign.title")}
         className={
@@ -689,6 +700,7 @@ export function UtilityDesignDialog({
         </div>
       </div>
       </aside>
+      ) : null}
       <Dialog open={consentNoticeOpen} onOpenChange={setConsentNoticeOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

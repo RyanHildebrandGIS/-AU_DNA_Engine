@@ -45,7 +45,10 @@ export interface GenerateNetworkOptions {
 }
 
 export interface GeneratedNetwork {
-  junctions: FeatureCollection<Point, { id: string; utilityType: string }>;
+  junctions: FeatureCollection<
+    Point,
+    { id: string; utilityType: string; junctionType: string }
+  >;
   lines: FeatureCollection<
     LineString,
     { id: string; utilityType: string; length_km: number; side: "left" | "right" }
@@ -62,6 +65,26 @@ const DEFAULT_MAX_JUNCTIONS = 500;
 const DEFAULT_OFFSET_METERS = 3;
 const DEFAULT_SIDE: NetworkSide = "right";
 const DEFAULT_MODE: NetworkCoverage = "mainline";
+
+/**
+ * Standard industry name for a junction structure, by utility domain — e.g.
+ * a water main junction is a "Valve", a sewer one a "Manhole". A simple
+ * utility-based lookup for now, not a rules-driven pick between e.g. a
+ * dead-end and a real intersection (see docs/utility-network.md); applied to
+ * every junction feature, including service-tap junctions.
+ */
+const JUNCTION_TYPE_LABELS: Record<string, string> = {
+  water: "Valve",
+  sewer: "Manhole",
+  stormwater: "Catch Basin",
+  electric: "Vault",
+  fiber: "Handhole",
+};
+const DEFAULT_JUNCTION_TYPE_LABEL = "Junction";
+
+function junctionTypeLabel(utilityType: string): string {
+  return JUNCTION_TYPE_LABELS[utilityType] ?? DEFAULT_JUNCTION_TYPE_LABEL;
+}
 
 /**
  * Generates a road-following utility network inside `area`: junctions spaced
@@ -191,8 +214,15 @@ export function generateNetworkFromRoads(
   // points, collecting every vertex along the way, so line-offset gets the
   // whole path at once — offsetting a single 2-point edge at a time left
   // gaps at every intermediate road vertex on any curving or multi-segment
-  // road, not just at real junctions.
-  const chains: Position[][] = [];
+  // road, not just at real junctions. Each chain remembers its two endpoint
+  // node indices (not just coordinates) so the offset line built from it can
+  // be anchored back to the true junction locations below.
+  interface Chain {
+    coords: Position[];
+    startNode: number;
+    endNode: number;
+  }
+  const chains: Chain[] = [];
   const toExpand: number[] = [rootNode];
   const expanded = new Set<number>();
   while (toExpand.length > 0) {
@@ -207,19 +237,21 @@ export function generateNetworkFromRoads(
         coords.push(graph.nodes[next]);
         current = next;
       }
-      chains.push(coords);
+      chains.push({ coords, startNode: start, endNode: current });
       toExpand.push(current);
     }
   }
 
-  // Junction markers stay at their true on-road location (unshifted); only
-  // the connecting lines are offset from the centerline — offsetting the
-  // junction points themselves would need projecting onto the offset line,
-  // out of scope for this pass (docs/utility-network.md).
+  // Junction markers stay at their true on-road location (unshifted); the
+  // connecting lines are offset from the centerline in the middle of each
+  // chain, but anchor back to this same true location at both ends (see the
+  // line-building loop below) so every line actually touches its junctions.
+  const junctionType = junctionTypeLabel(options.utilityType);
   const junctionFeatures = junctionNodes.map((node, i) =>
     point(graph.nodes[node], {
       id: `junction-${i + 1}`,
       utilityType: options.utilityType,
+      junctionType,
     }),
   );
 
@@ -230,13 +262,24 @@ export function generateNetworkFromRoads(
     { id: string; utilityType: string; length_km: number; side: "left" | "right" }
   >[] = [];
   let lineId = 1;
-  for (const coords of chains) {
-    const centerline = lineString(coords);
+  for (const chain of chains) {
+    const centerline = lineString(chain.coords);
     const lengthKm = length(centerline, { units: "kilometers" });
     for (const s of sides) {
       const offset = lineOffset(centerline, s === "left" ? offsetMeters : -offsetMeters, {
         units: "meters",
       });
+      // Anchor both ends back to the true (unoffset) junction/decision-point
+      // location. Without this, the offset line runs parallel to the
+      // centerline the whole way, never actually touching the junction
+      // marker (which stays at the true on-road point) — and two chains
+      // sharing a node would each be offset independently, leaving a visible
+      // gap between them right at the junction instead of meeting there.
+      const anchoredCoords: Position[] = [
+        graph.nodes[chain.startNode],
+        ...(offset.geometry.coordinates as Position[]),
+        graph.nodes[chain.endNode],
+      ];
       lineFeatures.push({
         type: "Feature",
         properties: {
@@ -245,7 +288,7 @@ export function generateNetworkFromRoads(
           length_km: Number(lengthKm.toFixed(4)),
           side: s,
         },
-        geometry: offset.geometry,
+        geometry: { type: "LineString", coordinates: anchoredCoords },
       });
     }
   }
@@ -272,6 +315,7 @@ export function generateNetworkFromRoads(
             point(tapPoint.geometry.coordinates, {
               id: `service-junction-${i + 1}`,
               utilityType: options.utilityType,
+              junctionType,
             }),
           ),
         ]
