@@ -33,6 +33,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { createAppAPI, getPluginManager } from "../../hooks/usePlugins";
+import { useIsMobileViewport } from "../../hooks/useIsMobileViewport";
 import {
   hasOsmRoadFetchConsent,
   recordOsmRoadFetchConsent,
@@ -121,11 +122,26 @@ export function UtilityDesignDialog({
 }: UtilityDesignDialogProps): ReactElement | null {
   const { t } = useTranslation();
   const active = useAppStore((s) => s.ui.activeView === "design");
+  const setActiveView = useAppStore((s) => s.setActiveView);
+  const isMobile = useIsMobileViewport();
   const sketchesLayer = useAppStore((s) =>
     s.layers.find((layer) => layer.metadata.sourceKind === SKETCHES_SOURCE_KIND),
   );
   const addGeoJsonLayer = useAppStore((s) => s.addGeoJsonLayer);
   const removeLayer = useAppStore((s) => s.removeLayer);
+
+  // On a narrow viewport, Design and Map are separate tabs (bottom bar) and
+  // this panel becomes a bottom sheet covering most of the screen — so a
+  // map-drawing/picking action needs to switch to the Map tab first, or the
+  // user can't see (or reach) the map to actually do it. On a wide viewport
+  // the map is already fully visible beside this panel, so switching away
+  // would just hide the panel for no reason.
+  const switchToMapForAction = useCallback(() => {
+    if (isMobile) setActiveView("map");
+  }, [isMobile, setActiveView]);
+  const switchBackFromMapAction = useCallback(() => {
+    if (isMobile) setActiveView("design");
+  }, [isMobile, setActiveView]);
 
   const [utilityType, setUtilityType] = useState<UtilityType>("water");
   const [spacingKm, setSpacingKm] = useState(DEFAULT_SPACING_KM);
@@ -156,6 +172,7 @@ export function UtilityDesignDialog({
   // draw mode — the user never has to find the right tool among the
   // editor's general-purpose toolbar (draw/edit/file modes).
   const handleDrawArea = useCallback(() => {
+    switchToMapForAction();
     const enterDrawMode = () => {
       startGeoEditorDrawMode("polygon");
       setDrawingArea(true);
@@ -179,43 +196,54 @@ export function UtilityDesignDialog({
     } else {
       map.once("load", activate);
     }
-  }, [mapControllerRef, getMap]);
+  }, [mapControllerRef, getMap, switchToMapForAction]);
 
   const handleCancelDrawArea = useCallback(() => {
     cancelGeoEditorDraw();
     setDrawingArea(false);
-  }, []);
+    switchBackFromMapAction();
+  }, [switchBackFromMapAction]);
 
   // The draw finishes when the polygon lands in the Sketches store layer
   // (reactive, same as the rest of this component's step-1 detection) —
   // no need to listen for the editor's own mode-change event.
   useEffect(() => {
-    if (drawingArea && areaFeature) setDrawingArea(false);
-  }, [drawingArea, areaFeature]);
+    if (drawingArea && areaFeature) {
+      setDrawingArea(false);
+      switchBackFromMapAction();
+    }
+  }, [drawingArea, areaFeature, switchBackFromMapAction]);
 
   // Escape cancels the in-progress draw, mirroring the point-pick flow below.
+  // Capture phase: the GeoEditor plugin has its own Escape handling for the
+  // draw tool itself, and if it runs first and stops the event, our state
+  // (and the map-tab switch-back) would never reset. A capture-phase
+  // listener on window always runs before any bubble-phase listener.
   useEffect(() => {
     if (!drawingArea) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       handleCancelDrawArea();
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    window.addEventListener("keydown", handleKey, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handleKey, { capture: true });
   }, [drawingArea, handleCancelDrawArea]);
 
   // The panel is non-modal (docked beside the map, never an overlay), so the
   // map underneath is already clickable — no need to hide anything while
   // picking, unlike FieldCollectionDialog's modal point-pick flow.
   const handlePickSource = useCallback(() => {
+    switchToMapForAction();
     setPicking(true);
-  }, []);
+  }, [switchToMapForAction]);
 
   useEffect(() => {
     if (!picking) return;
     const map = getMap();
     if (!map) {
       setPicking(false);
+      switchBackFromMapAction();
       return;
     }
     const prevCursor = map.getCanvas().style.cursor;
@@ -223,19 +251,23 @@ export function UtilityDesignDialog({
     const handleClick = (e: maplibregl.MapMouseEvent) => {
       setSource({ lon: e.lngLat.lng, lat: e.lngLat.lat });
       setPicking(false);
+      switchBackFromMapAction();
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setPicking(false);
+      switchBackFromMapAction();
     };
     map.once("click", handleClick);
-    window.addEventListener("keydown", handleKey);
+    // Capture phase for the same reason as the draw-cancel listener above —
+    // runs before any other Escape handling that might stop the event.
+    window.addEventListener("keydown", handleKey, { capture: true });
     return () => {
       map.off("click", handleClick);
-      window.removeEventListener("keydown", handleKey);
+      window.removeEventListener("keydown", handleKey, { capture: true });
       map.getCanvas().style.cursor = prevCursor;
     };
-  }, [picking, getMap]);
+  }, [picking, getMap, switchBackFromMapAction]);
 
   // Show a temporary marker for the picked source point (not a saved layer).
   useEffect(() => {
