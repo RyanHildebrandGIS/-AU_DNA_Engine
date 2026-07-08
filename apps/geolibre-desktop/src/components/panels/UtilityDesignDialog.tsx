@@ -75,6 +75,8 @@ interface GeneratedResult {
   totalKm: number;
   truncated: boolean;
   servicesTruncated: boolean;
+  servicesBlocked: boolean;
+  servicesBlockedCount: number;
 }
 
 interface UtilityDesignDialogProps {
@@ -375,6 +377,8 @@ export function UtilityDesignDialog({
         totalKm,
         truncated: generated.truncated,
         servicesTruncated: generated.servicesTruncated,
+        servicesBlocked: generated.servicesBlocked,
+        servicesBlockedCount: generated.servicesBlockedCount,
       });
       // Let the overlay's "Done!" checkmark state linger for a beat instead
       // of disappearing the instant the last progress event fires.
@@ -715,6 +719,11 @@ export function UtilityDesignDialog({
                 {result.truncated ? ` ${t("utilityDesign.resultTruncated")}` : ""}
                 {result.servicesTruncated
                   ? ` ${t("utilityDesign.resultServicesTruncated")}`
+                  : ""}
+                {result.servicesBlocked
+                  ? ` ${t("utilityDesign.resultServicesBlocked", {
+                      count: result.servicesBlockedCount,
+                    })}`
                   : ""}
               </p>
             ) : null}

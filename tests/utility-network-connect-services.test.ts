@@ -70,4 +70,82 @@ describe("connectBuildingsToLines", () => {
     assert.equal(truncated, false);
     assert.equal(services.features.length, 0);
   });
+
+  describe("avoiding neighboring buildings", () => {
+    // Building A sits directly between mainline LINE1 (x=0) and building B
+    // (centered around x=0.003) — a straight service from LINE1 to B would
+    // cut right through A. LINE2 (x=0.008) is farther from B overall, but its
+    // straight path to B passes entirely east of A, so it's a valid fallback.
+    const BUILDING_A = polygon(
+      [
+        [
+          [0.0005, 0.0045],
+          [0.0015, 0.0045],
+          [0.0015, 0.0055],
+          [0.0005, 0.0055],
+          [0.0005, 0.0045],
+        ],
+      ],
+      { building: "yes" },
+    ) as unknown as { type: "Feature"; properties: object; geometry: Polygon };
+    const BUILDING_B = polygon(
+      [
+        [
+          [0.0025, 0.0045],
+          [0.0035, 0.0045],
+          [0.0035, 0.0055],
+          [0.0025, 0.0055],
+          [0.0025, 0.0045],
+        ],
+      ],
+      { building: "yes" },
+    ) as unknown as { type: "Feature"; properties: object; geometry: Polygon };
+    const LINE1 = lineString(
+      [
+        [0, 0],
+        [0, 0.01],
+      ],
+      { id: "line-1" },
+    );
+    const LINE2 = lineString(
+      [
+        [0.008, 0],
+        [0.008, 0.01],
+      ],
+      { id: "line-2" },
+    );
+
+    it("falls back to the next-nearest mainline candidate when the nearest one would cross another building", () => {
+      const buildings = featureCollection([BUILDING_A, BUILDING_B]);
+      const lines = featureCollection<LineString, { id: string }>([LINE1, LINE2]);
+
+      const { services, blockedByOtherBuilding, blockedCount } =
+        connectBuildingsToLines(buildings, lines);
+
+      assert.equal(blockedByOtherBuilding, false);
+      assert.equal(blockedCount, 0);
+      assert.equal(services.features.length, 2);
+      // Building B's service must tap LINE2 (x=0.008), not LINE1 (x=0), since
+      // LINE1's path would cross building A.
+      const bService = services.features.find((f) =>
+        f.geometry.coordinates.some((c) => Math.abs(c[0] - 0.008) < 1e-9),
+      );
+      assert.ok(bService, "expected building B's service to tap the x=0.008 line");
+    });
+
+    it("skips and reports a building when every mainline candidate would cross another building", () => {
+      const buildings = featureCollection([BUILDING_A, BUILDING_B]);
+      // Only LINE1 is available this time — building B's only path is
+      // blocked by A, with no fallback line to try instead.
+      const lines = featureCollection<LineString, { id: string }>([LINE1]);
+
+      const { services, blockedByOtherBuilding, blockedCount } =
+        connectBuildingsToLines(buildings, lines);
+
+      assert.equal(blockedByOtherBuilding, true);
+      assert.equal(blockedCount, 1);
+      // Building A still connects fine; only B (blocked) is skipped.
+      assert.equal(services.features.length, 1);
+    });
+  });
 });

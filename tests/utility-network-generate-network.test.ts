@@ -345,6 +345,8 @@ describe("generateNetworkFromRoads services mode", () => {
     });
     assert.equal(result.services.features.length, 0);
     assert.equal(result.servicesTruncated, false);
+    assert.equal(result.servicesBlocked, false);
+    assert.equal(result.servicesBlockedCount, 0);
   });
 
   it("connects buildings to the mainline when mode is mainlineAndServices", () => {

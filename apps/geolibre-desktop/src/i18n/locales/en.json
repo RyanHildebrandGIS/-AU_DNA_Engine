@@ -2078,6 +2078,7 @@
     "resultSummaryWithServices": "{{junctions}} junctions, {{lines}} line segments, {{services}} service connections, {{km}} km total.",
     "resultTruncated": "Junction count was capped — try a larger spacing.",
     "resultServicesTruncated": "Service connection count was capped — try a smaller project area.",
+    "resultServicesBlocked": "{{count}} building(s) were not connected because every path to the mainline would cross a neighboring property.",
     "roadNoticeTitle": "Fetching road data",
     "roadNoticeDesc": "Generating a network sends the coordinates of your drawn project area to the public OpenStreetMap Overpass API, so the pipe network can follow real roads. No account or API key is needed, but the request goes to a shared public server."
   },

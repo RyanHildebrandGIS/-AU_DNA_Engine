@@ -812,7 +812,7 @@ export function createAssistantTools(
   const generateUtilityNetwork = tool({
     name: "generate_utility_network",
     description:
-      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API; no domain-specific rules yet (pipe sizing, slope, valve placement).",
+      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones. In mainlineAndServices mode, a building whose only paths to the mainline would cross a different building's footprint is skipped rather than drawn through a neighboring property — check servicesBlockedCount in the response and mention it if nonzero. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API (retrying transient 429/502/503/504 errors automatically); no domain-specific rules yet (pipe sizing, slope, valve placement).",
     inputSchema: z.object({
       areaLayer: z
         .string()
@@ -913,6 +913,8 @@ export function createAssistantTools(
         serviceCount: result.services.features.length,
         truncated: result.truncated,
         servicesTruncated: result.servicesTruncated,
+        servicesBlocked: result.servicesBlocked,
+        servicesBlockedCount: result.servicesBlockedCount,
       });
     },
   });

@@ -76,6 +76,12 @@ export interface GeneratedNetwork {
   truncated: boolean;
   /** True if the building count exceeded maxServices and was truncated. */
   servicesTruncated: boolean;
+  /** True if one or more buildings could not be connected without crossing a
+   * different building's footprint, and were skipped rather than drawn
+   * through a neighboring property. */
+  servicesBlocked: boolean;
+  /** Count of buildings skipped for that reason. */
+  servicesBlockedCount: number;
 }
 
 const DEFAULT_MAX_JUNCTIONS = 500;
@@ -329,13 +335,21 @@ export function generateNetworkFromRoads(
 
   const lines = featureCollection(lineFeatures);
   const mode = options.mode ?? DEFAULT_MODE;
-  const { services, tapPoints, truncated: servicesTruncated } =
+  const {
+    services,
+    tapPoints,
+    truncated: servicesTruncated,
+    blockedByOtherBuilding: servicesBlocked,
+    blockedCount: servicesBlockedCount,
+  } =
     mode === "mainlineAndServices" && buildings
       ? connectBuildingsToLines(buildings, lines, options.maxServices)
       : {
           services: featureCollection<LineString, { id: string }>([]),
           tapPoints: [] as Feature<Point>[],
           truncated: false,
+          blockedByOtherBuilding: false,
+          blockedCount: 0,
         };
 
   // Optional: a service's tap point is a real fitting on the main, so it can
@@ -361,5 +375,7 @@ export function generateNetworkFromRoads(
     services,
     truncated,
     servicesTruncated,
+    servicesBlocked,
+    servicesBlockedCount,
   };
 }

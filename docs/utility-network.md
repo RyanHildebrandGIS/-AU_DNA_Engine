@@ -72,15 +72,24 @@ front doors.
    query, `way["building"](poly:"...")`) and connects each one to the
    already-offset mainline (`connect-services.ts`):
    1. The building's centroid (`@turf/centroid`) is an approximate anchor.
-   2. `@turf/nearest-point-on-line` runs against every generated mainline
-      feature (both offset lines when `side: "both"`) to find the nearest
-      point overall — the main-side tap point. This naturally picks whichever
-      side's offset line is physically closer.
-   3. `@turf/nearest-point-on-line` runs again, this time against the
-      building's own footprint ring, using the tap point as the reference —
-      giving the building-side connection point on the footprint edge
-      closest to the main, not the centroid itself.
-   4. A 2-point service line is emitted between those two points.
+   2. Every mainline feature (both offset lines when `side: "both"`) is
+      ranked by `@turf/nearest-point-on-line` distance to that anchor, closest
+      first, keeping the nearest 5 as candidates.
+   3. Candidates are tried in that order. For each one,
+      `@turf/nearest-point-on-line` runs again against the building's own
+      footprint ring, using the candidate's main-side point as the
+      reference, giving the building-side connection point on the footprint
+      edge closest to the main (not the centroid itself). The resulting
+      2-point service line is checked with `@turf/boolean-intersects`
+      against every *other* building in the area — real service laterals
+      stay within the public right-of-way and the customer's own lot, never
+      cutting across a neighboring property, and without parcel/lot-line
+      data this is the closest enforceable proxy for that rule. The first
+      candidate whose line doesn't cross another building's footprint wins.
+   4. If none of the 5 nearest candidates qualify, the building is skipped
+      entirely rather than drawn through a neighbor's home, and counted in
+      `servicesBlockedCount` (`servicesBlocked` is true when that count is
+      nonzero).
 
    Available for every utility type. Buildings beyond `maxServices` (default
    500, same shape as `maxJunctions`) are dropped and reported via
@@ -116,12 +125,25 @@ front doors.
 - **Service connections are ways-only** — buildings modeled as OSM
   `relation`s (multipolygon buildings, e.g. ones with courtyards) are not
   fetched, the same ways-only simplification already accepted for roads.
-- **Service connections are a two-step nearest-point approximation, not a
-  true mutual-nearest solve.** The main-side tap point is chosen using the
+- **Service connections are a nearest-point approximation, not a true
+  mutual-nearest solve.** The main-side tap point is chosen using the
   building's centroid as a stand-in for "where on the building we'll connect
   from," which can pick a slightly different tap point than jointly
   optimizing both ends at once would. A reasonable first pass, not a
   network-design-grade solve.
+- **The "don't cross another building" check only has building footprints to
+  work with, not real parcel/lot lines.** A service line that squeezes
+  between two close-together buildings without touching either one is
+  accepted even if it would, in reality, cross a third property's yard; a
+  line whose endpoint merely touches a neighboring building's wall (two
+  buildings built right up against each other) is rejected even though nothing
+  is actually being crossed. Real lot-line data would resolve both, but isn't
+  available from OSM building footprints alone.
+- **Only the 5 nearest mainline candidates are tried per building** (not
+  every mainline segment) before giving up and skipping it — bounds the cost
+  of the crossing check (building × candidate × building) for large project
+  areas. A building whose nearest 5 candidates are all blocked but whose 6th
+  would have worked is skipped rather than found.
 
 ## Explicitly out of scope
 
