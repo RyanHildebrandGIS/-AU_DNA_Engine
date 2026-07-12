@@ -41,6 +41,39 @@ describe("fetchOsmRoads", () => {
     assert.match(decoded, /49\.85 -97\.2/);
   });
 
+  it("allows every real drivable street class, including smaller residential-scale ones", async (t) => {
+    // Regression guard: a user reported smaller streets not getting drawn.
+    // The allowlist itself was never the cause (residential/living_street/
+    // service/unclassified were always included), but this pins that down
+    // so a future edit can't accidentally narrow the filter and reintroduce
+    // that exact symptom.
+    let capturedBody: string | undefined;
+    t.mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+    });
+
+    await fetchOsmRoads(AREA);
+
+    const decoded = decodeURIComponent(capturedBody!.replace(/^data=/, ""));
+    for (const drivableClass of [
+      "motorway",
+      "trunk",
+      "primary",
+      "secondary",
+      "tertiary",
+      "unclassified",
+      "residential",
+      "living_street",
+      "service",
+    ]) {
+      assert.ok(
+        decoded.includes(drivableClass),
+        `expected the highway filter to include "${drivableClass}"`,
+      );
+    }
+  });
+
   it("parses Overpass way elements with inline geometry into LineString features", async (t) => {
     t.mock.method(globalThis, "fetch", async () =>
       new Response(

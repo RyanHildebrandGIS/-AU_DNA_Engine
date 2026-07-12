@@ -207,15 +207,36 @@ export function UtilityDesignDialog({
     };
     // The editor reads the live map style to derive its drawing styles; if a
     // basemap style is still loading (e.g. right after app start), activating
-    // immediately throws inside the plugin. Defer to the map's `load` event
-    // in that case instead of activating against a half-initialized style.
-    const map = getMap();
-    if (!map || map.isStyleLoaded()) {
-      activate();
-    } else {
-      map.once("load", activate);
-    }
-  }, [mapControllerRef, getMap, switchToMapForAction]);
+    // immediately throws inside the plugin. `load` only ever fires once for a
+    // map instance's *first* style, so if it already fired before this runs
+    // (the common case — the user took at least a moment to click after the
+    // app opened), `map.once("load", activate)` would wait forever and this
+    // button would silently do nothing on that click. Poll via `styledata`
+    // (which fires repeatedly while a style loads) and re-check
+    // `isStyleLoaded()` each time instead, so this works regardless of
+    // whether the load event already passed. If the map controller itself
+    // isn't attached yet (very first paint), retry shortly rather than
+    // activating against a nonexistent map, which would silently skip the
+    // editor's map-dependent setup.
+    const waitForMapReady = () => {
+      const map = getMap();
+      if (!map) {
+        window.setTimeout(waitForMapReady, 50);
+        return;
+      }
+      if (map.isStyleLoaded()) {
+        activate();
+        return;
+      }
+      const onStyleData = () => {
+        if (!map.isStyleLoaded()) return;
+        map.off("styledata", onStyleData);
+        activate();
+      };
+      map.on("styledata", onStyleData);
+    };
+    waitForMapReady();
+  }, [getMap, switchToMapForAction, mapControllerRef]);
 
   const handleCancelDrawArea = useCallback(() => {
     cancelGeoEditorDraw();

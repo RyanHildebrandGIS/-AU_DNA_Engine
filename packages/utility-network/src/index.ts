@@ -8,6 +8,7 @@ export type {
   GenerateNetworkProgressEvent,
   GenerateNetworkProgressCallback,
 } from "./generate-network";
+export { anchorOffsetLine } from "./anchor-offset-line";
 export { clipLineToArea } from "./clip-to-area";
 export { fetchOsmRoads } from "./fetch-roads";
 export type { FetchOsmRoadsOptions } from "./fetch-roads";

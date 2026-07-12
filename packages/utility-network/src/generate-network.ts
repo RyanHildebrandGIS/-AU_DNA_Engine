@@ -10,6 +10,7 @@ import type {
   Polygon,
   Position,
 } from "geojson";
+import { anchorOffsetLine } from "./anchor-offset-line";
 import { clipLineToArea } from "./clip-to-area";
 import { connectBuildingsToLines } from "./connect-services";
 import { fetchOsmBuildings } from "./fetch-buildings";
@@ -315,11 +316,14 @@ export function generateNetworkFromRoads(
       // marker (which stays at the true on-road point) — and two chains
       // sharing a node would each be offset independently, leaving a visible
       // gap between them right at the junction instead of meeting there.
-      const anchoredCoords: Position[] = [
+      // anchorOffsetLine also trims away any overshoot line-offset produces
+      // at a sharp bend and guarantees the result never self-intersects —
+      // see its doc comment.
+      const anchoredCoords = anchorOffsetLine(
+        offset,
         graph.nodes[chain.startNode],
-        ...(offset.geometry.coordinates as Position[]),
         graph.nodes[chain.endNode],
-      ];
+      );
       lineFeatures.push({
         type: "Feature",
         properties: {

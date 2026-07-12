@@ -4,6 +4,7 @@ import {
   generateNetwork,
   generateNetworkFromRoads,
 } from "@geolibre/utility-network";
+import kinks from "@turf/kinks";
 import type {
   Feature,
   FeatureCollection,
@@ -333,6 +334,46 @@ describe("generateNetworkFromRoads", () => {
         assert.ok(lon <= 0.006 + 1e-4, `lon ${lon} should not exceed the drawn area`);
         assert.ok(lat <= 0.006 + 1e-4, `lat ${lat} should not exceed the drawn area`);
       }
+    }
+  });
+
+  it("never produces a self-intersecting line, even along a road with a sharp hairpin bend", () => {
+    // A road with a near-hairpin bend near its far end (like the curving
+    // "Elm Bay" street that triggered this bug in practice) — offsetting a
+    // sharp bend can overshoot, and anchoring naively onto that overshoot
+    // can self-intersect right next to the junction.
+    const hairpinRoad: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0],
+              [0.003, 0],
+              [0.006, 0.0003],
+              [0.0063, 0.0003],
+              [0.00605, 0.0005],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      hairpinRoad,
+      { utilityType: "water", spacingKm: 0.01, offsetMeters: 8 },
+    );
+    assert.ok(result.lines.features.length > 0);
+    for (const line of result.lines.features) {
+      assert.equal(
+        kinks(line).features.length,
+        0,
+        `line ${line.properties.id} must not self-intersect: ${JSON.stringify(line.geometry.coordinates)}`,
+      );
     }
   });
 });

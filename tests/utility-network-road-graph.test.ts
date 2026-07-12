@@ -78,6 +78,75 @@ describe("snapToNearestNode", () => {
   });
 });
 
+describe("shortestPathTree with a loop street", () => {
+  // A "horseshoe" residential loop: a short spur off a through road splits
+  // into two arms that reconnect at a far node, forming a cycle. This pins
+  // down expected (not buggy) behavior — every node on the loop is still
+  // reachable and gets a tree parent, but exactly one edge of the cycle
+  // (the one not on either side's shortest path) is never used by any
+  // path back to the root, since a shortest-path tree cannot include every
+  // edge of a loop by definition. Real utility mains are laid out the same
+  // way: branching off a source, not duplicated around a loop.
+  const THROUGH_ROAD: FeatureCollection<LineString> = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { highway: "residential" },
+        geometry: {
+          type: "LineString",
+          coordinates: [[0, 0], [0.005, 0], [0.01, 0]],
+        },
+      },
+      // Two arms of the loop, off the through road at (0.005, 0), meeting at
+      // the far node (0.005, 0.004).
+      {
+        type: "Feature",
+        properties: { highway: "residential" },
+        geometry: {
+          type: "LineString",
+          coordinates: [[0.005, 0], [0.003, 0.002], [0.005, 0.004]],
+        },
+      },
+      {
+        type: "Feature",
+        properties: { highway: "residential" },
+        geometry: {
+          type: "LineString",
+          coordinates: [[0.005, 0], [0.007, 0.002], [0.005, 0.004]],
+        },
+      },
+    ],
+  };
+
+  it("reaches every node on the loop, even though one closing edge goes unused", () => {
+    const graph = buildRoadGraph(THROUGH_ROAD);
+    const root = graph.nodes.findIndex(([x, y]) => x === 0 && y === 0);
+    const tree = shortestPathTree(graph, root);
+
+    for (let i = 0; i < graph.nodes.length; i++) {
+      assert.notEqual(
+        tree.distanceKm[i],
+        Infinity,
+        `node ${i} (${graph.nodes[i]}) on the loop should still be reachable`,
+      );
+    }
+
+    // The far node where both arms meet is reached via whichever arm is
+    // shorter (they're symmetric here, so either is valid) — but its
+    // parent can only be one of the two neighboring loop nodes, not both,
+    // since a tree allows exactly one parent per node.
+    const farNode = graph.nodes.findIndex(
+      ([x, y]) => x === 0.005 && y === 0.004,
+    );
+    const farNodeNeighbors = graph.adjacency[farNode].map((e) => e.to);
+    const parentIsALoopNeighbor = farNodeNeighbors.includes(
+      tree.parent[farNode],
+    );
+    assert.ok(parentIsALoopNeighbor);
+  });
+});
+
 describe("shortestPathTree + pathToRoot", () => {
   it("reaches every node in a fully-connected grid", () => {
     const graph = buildRoadGraph(GRID_ROADS);

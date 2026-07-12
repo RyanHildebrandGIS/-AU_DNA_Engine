@@ -54,19 +54,44 @@ front doors.
    `generate-network.ts`), not a rules-driven pick between e.g. a dead-end
    and a real intersection.
 5. **Connect to source** — Dijkstra's algorithm from the source node produces
-   a shortest-path tree over the real road graph; the union of every edge
+   a shortest-path **tree** over the real road graph; the union of every edge
    along every junction's path back to the source becomes the line network
    (shared trunk segments are emitted once, not duplicated per junction).
+   Because this is a tree, not the full road topology, a street that forms a
+   loop back into the already-connected network (a horseshoe/cul-de-sac loop,
+   or any street reconnecting to a road it already branched from) gets a line
+   on every reachable node **except the single edge that would close the
+   loop** — that edge simply isn't on anyone's shortest path back to the
+   source, so it's correctly left undrawn rather than a bug in the highway
+   filter. This mirrors how utility mains are actually laid out in practice
+   (branching off a source, not duplicated around a loop) — see "Design
+   standards" below. It is *not* related to the drivable-highway allowlist in
+   step 1: `residential`, `living_street`, `service`, and `unclassified` are
+   all included there, so ordinary smaller streets are fetched and graphed
+   the same as arterial roads. A street that's missing entirely (not just one
+   loop-closing edge) usually means its only connection to the rest of the
+   network falls outside the polygon the user drew — draw the project area to
+   fully enclose every street that should connect, not just up to its
+   frontage.
 6. **Offset** — each line is offset perpendicular to the road centerline by
    `offsetMeters`, to one or both sides (`side: "left" | "right" | "both"`),
    then **anchored back to the true (unoffset) junction/decision-point
-   location at both of its endpoints**. Without this, an offset line runs
-   parallel to the centerline for its whole length and never actually
-   touches the junction marker sitting on the true on-road point, and two
-   chains sharing a node would each be offset independently, leaving a
-   visible gap right at the junction instead of meeting there. Every
-   generated line's endpoints are therefore guaranteed to exactly match a
-   junction (or the source) — connectivity, not just visual proximity.
+   location at both of its endpoints** via `anchor-offset-line.ts`. Without
+   this, an offset line runs parallel to the centerline for its whole length
+   and never actually touches the junction marker sitting on the true on-road
+   point, and two chains sharing a node would each be offset independently,
+   leaving a visible gap right at the junction instead of meeting there.
+   Every generated line's endpoints are therefore guaranteed to exactly match
+   a junction (or the source) — connectivity, not just visual proximity.
+   `@turf/line-offset`'s mitered joins can overshoot past a sharp bend, which
+   a naive prepend/append of the true endpoint could turn into a
+   self-intersecting spike right next to the junction; `anchorOffsetLine`
+   trims the offset line to the span between where it lands closest to each
+   true endpoint first, and as an unconditional final guarantee checks the
+   result with `@turf/kinks`, falling back to a plain straight line between
+   the two true endpoints (a single segment, which can never self-intersect)
+   if it still does. **Lines never self-intersect**, even at the cost of
+   losing the offset's visual detail in that rare fallback case.
 7. **Services** (`mode: "mainlineAndServices"` only) — fetches OSM building
    footprints in the drawn area (`fetch-buildings.ts`, a second Overpass
    query, `way["building"](poly:"...")`) and connects each one to the
@@ -99,6 +124,39 @@ front doors.
    point also gets its own junction marker — a real tap is a real fitting on
    the main, so it can be worth showing as a junction distinct from the
    road-spacing/intersection junctions above. Off by default.
+
+## Design standards
+
+The junction/spacing/offset/service-connection behavior above was checked
+against real municipal/utility water-main design manuals (e.g. Saskatchewan's
+rural water design standards and comparable municipal servicing manuals) and
+matches this tool's defaults reasonably well:
+
+- **Valves/junctions belong on every branch of every intersection and tee** —
+  "valves shall be placed on all branches of crosses and tees... located where
+  right-of-way lines intersect with proposed water mains" is a standard
+  requirement across these manuals. This matches step 4 above: every real
+  intersection or dead-end reachable from the source always gets a junction
+  marker, unconditionally, not just wherever a spacing candidate happens to
+  land.
+- **Valve spacing standards vary by main size and density**, commonly ranging
+  from roughly 500 ft up to a 1/4–1/2 mile depending on pipe diameter and
+  surrounding development density. This matches `spacingKm` being a
+  user-configurable input rather than a fixed constant — there's no single
+  correct number, it's a real design decision that depends on the project.
+- **Service connections are conventionally perpendicular to the main** for a
+  straight run — which is exactly what `@turf/nearest-point-on-line` produces
+  by construction (the nearest point on a straight segment to an external
+  point is always the perpendicular foot), validating the nearest-point
+  approach in step 7 rather than it being an arbitrary simplification.
+- **Minimum main-to-main separation is commonly around 10 ft (~3 m)** in these
+  manuals, which is in the same range as this tool's `DEFAULT_OFFSET_METERS`
+  (3 m) default for how far a line sits from the road centerline.
+
+None of this is pipe-sizing, hydraulic, or gravity-slope engineering — those
+remain explicitly out of scope (see below) — this is specifically about
+where junctions, spacing, and service taps go, which is the part this tool
+actually generates.
 
 ## Known simplifications
 
