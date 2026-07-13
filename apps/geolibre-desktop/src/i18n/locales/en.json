@@ -2091,7 +2091,28 @@
   },
   "cost": {
     "title": "Cost",
-    "comingSoon": "Cost estimation is coming soon."
+    "description": "Planning-level cost estimate for the utility networks generated in this project.",
+    "emptyState": "Generate a utility network in Design to see a cost estimate here. The unit-cost template below can still be reviewed and customized ahead of time.",
+    "subtotal": "Subtotal",
+    "contingency": "Contingency ({{percent}}%)",
+    "total": "Estimated total",
+    "lineItemsTitle": "Line items",
+    "columnUtility": "Utility",
+    "columnComponent": "Component",
+    "columnQuantity": "Qty",
+    "columnTotal": "Total",
+    "component": {
+      "main": "Main",
+      "junctions": "Junctions",
+      "services": "Services"
+    },
+    "rateTemplateTitle": "Unit cost template",
+    "rateTemplateHelper": "Generic planning-level averages — edit any value to match your project's real costs. Edits are saved on this device and reused next time.",
+    "mainCostLabel": "Main ($/m)",
+    "junctionCostLabel": "Junction ($/ea)",
+    "serviceCostLabel": "Service ($/ea)",
+    "contingencyLabel": "Contingency (%)",
+    "resetDefaults": "Reset to defaults"
   },
   "assistant": {
     "title": "AI Assistant",

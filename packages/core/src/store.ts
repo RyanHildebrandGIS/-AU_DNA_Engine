@@ -356,7 +356,8 @@ export interface AppState {
     name: string,
     geojson: FeatureCollection,
     sourcePath?: string,
-    beforeLayerId?: string | null
+    beforeLayerId?: string | null,
+    metadata?: Record<string, unknown>
   ) => string;
   /**
    * Add a native raster tile layer (XYZ, WMS, or WMTS) from one or more tile
@@ -1083,7 +1084,13 @@ export const useAppStore = create<AppState>()(
           return { layers: next, isDirty: true };
         }),
 
-      addGeoJsonLayer: (name, geojson, sourcePath, beforeLayerId = null) => {
+      addGeoJsonLayer: (
+        name,
+        geojson,
+        sourcePath,
+        beforeLayerId = null,
+        metadata = {}
+      ) => {
         const id = uuidv4();
         const layer: GeoLibreLayer = {
           id,
@@ -1096,7 +1103,7 @@ export const useAppStore = create<AppState>()(
             ...DEFAULT_LAYER_STYLE,
             simpleStyleEnabled: hasSimpleStyleProperties(geojson),
           },
-          metadata: {},
+          metadata,
           geojson,
           sourcePath,
         };

@@ -43,6 +43,8 @@ import {
   hasOsmRoadFetchConsent,
   recordOsmRoadFetchConsent,
 } from "../../lib/osm-road-fetch-consent";
+import { utilityNetworkLayerMetadata } from "../../lib/utility-network-layers";
+import { UTILITY_TYPES, type UtilityType } from "../../lib/utility-types";
 import {
   NetworkGenerationOverlay,
   type NetworkGenerationRetryInfo,
@@ -54,16 +56,6 @@ const NETWORK_COVERAGES: NetworkCoverage[] = ["mainline", "mainlineAndServices"]
 
 const GEO_EDITOR_PLUGIN_ID = "maplibre-gl-geo-editor";
 const DEFAULT_SPACING_KM = 0.2;
-
-type UtilityType = "water" | "sewer" | "stormwater" | "electric" | "fiber";
-
-const UTILITY_TYPES: UtilityType[] = [
-  "water",
-  "sewer",
-  "stormwater",
-  "electric",
-  "fiber",
-];
 
 interface GeneratedResult {
   junctionsLayerId: string;
@@ -372,16 +364,25 @@ export function UtilityDesignDialog({
       const junctionsLayerId = addGeoJsonLayer(
         `${label} junctions`,
         generated.junctions as unknown as FeatureCollection,
+        undefined,
+        null,
+        utilityNetworkLayerMetadata("junctions", utilityType),
       );
       const linesLayerId = addGeoJsonLayer(
         `${label} network lines`,
         generated.lines as unknown as FeatureCollection,
+        undefined,
+        null,
+        utilityNetworkLayerMetadata("lines", utilityType),
       );
       const servicesLayerId =
         generated.services.features.length > 0
           ? addGeoJsonLayer(
               `${label} services`,
               generated.services as unknown as FeatureCollection,
+              undefined,
+              null,
+              utilityNetworkLayerMetadata("services", utilityType),
             )
           : null;
       const totalKm = generated.lines.features.reduce(

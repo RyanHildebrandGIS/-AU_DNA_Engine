@@ -9,6 +9,18 @@ export type {
   GenerateNetworkProgressCallback,
 } from "./generate-network";
 export { anchorOffsetLine } from "./anchor-offset-line";
+export {
+  DEFAULT_UNIT_COSTS,
+  DEFAULT_CONTINGENCY_PERCENT,
+  estimateNetworkCost,
+} from "./cost-estimate";
+export type {
+  UnitCosts,
+  NetworkQuantities,
+  CostComponent,
+  CostLineItem,
+  CostEstimate,
+} from "./cost-estimate";
 export { clipLineToArea } from "./clip-to-area";
 export { fetchOsmRoads } from "./fetch-roads";
 export type { FetchOsmRoadsOptions } from "./fetch-roads";
