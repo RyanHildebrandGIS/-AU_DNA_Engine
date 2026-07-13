@@ -41,12 +41,13 @@ describe("fetchOsmRoads", () => {
     assert.match(decoded, /49\.85 -97\.2/);
   });
 
-  it("allows every real drivable street class, including smaller residential-scale ones", async (t) => {
-    // Regression guard: a user reported smaller streets not getting drawn.
-    // The allowlist itself was never the cause (residential/living_street/
-    // service/unclassified were always included), but this pins that down
-    // so a future edit can't accidentally narrow the filter and reintroduce
-    // that exact symptom.
+  it("allows every real drivable street class, including smaller residential-scale and unpaved rural roads", async (t) => {
+    // Regression guard: users reported smaller/older streets not getting
+    // drawn. The allowlist was already fine for residential/living_street/
+    // service/unclassified; `track` and `road` were the actual gap (common
+    // tags on older rural roads never reclassified after initial mapping) —
+    // this pins the full expected set down so a future edit can't
+    // accidentally narrow the filter and reintroduce that symptom.
     let capturedBody: string | undefined;
     t.mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
       capturedBody = init?.body as string;
@@ -66,6 +67,8 @@ describe("fetchOsmRoads", () => {
       "residential",
       "living_street",
       "service",
+      "track",
+      "road",
     ]) {
       assert.ok(
         decoded.includes(drivableClass),

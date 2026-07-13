@@ -12,10 +12,15 @@ front doors.
    [Overpass API](https://overpass-api.de) for OSM road centerlines within the
    drawn polygon, restricted to drivable highway classes via a regex value
    filter (`way["highway"~"^(motorway|trunk|primary|secondary|tertiary|
-   unclassified|residential|living_street|service|...|_link variants)$"]
-   (poly:"...")`) — footways, cycleways, paths, tracks, and steps are
-   excluded, since a utility mainline runs in the vehicle right-of-way, not a
-   footpath. Returns a plain LineString `FeatureCollection`. This is the only
+   unclassified|residential|living_street|service|track|road|...|_link
+   variants)$"](poly:"...")`) — footways, cycleways, paths, bridleways, and
+   steps are excluded, since a utility mainline runs in the vehicle
+   right-of-way, not a footpath; `track` (unpaved rural/agricultural access
+   roads) and `road` (OSM's placeholder for a road not yet classified,
+   common on older roads never reclassified after initial mapping) are
+   included since they carry real vehicle traffic. Neither is filtered by
+   `access`/`motor_vehicle` tags — see "Known simplifications" below. Returns
+   a plain LineString `FeatureCollection`. This is the only
    network call; everything after this step is synchronous and local.
    `queryOverpassWays` (`overpass-client.ts`, shared with the buildings fetch)
    retries a 429/502/503/504 response up to twice with a short backoff before
@@ -160,6 +165,16 @@ actually generates.
 
 ## Known simplifications
 
+- **The drivable-highway filter checks only the `highway` tag, not
+  `access`/`motor_vehicle`/lifecycle prefixes.** A `track` or `residential`
+  way tagged `access=private` or `access=no` is still fetched and used —
+  there's no per-project way to know whether "private" should mean "exclude
+  from the utility main" (a real gated road) or is just noise (many rural
+  tracks are tagged private but are the only road serving a property). A way
+  tagged with an OSM lifecycle prefix (`disused:highway=residential`,
+  `demolished:highway=track`, etc., meaning it no longer physically exists as
+  a road) is correctly excluded, since the filter matches the literal
+  `highway` key and lifecycle-prefixed tags use a different key entirely.
 - **Junctions snap to the nearest existing graph node rather than splitting
   the road edge they land nearest to.** True edge-splitting would place
   junctions at exact regular intervals; snapping means a junction can be off
