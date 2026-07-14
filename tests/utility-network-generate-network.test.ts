@@ -4,6 +4,7 @@ import {
   generateNetwork,
   generateNetworkFromRoads,
 } from "@geolibre/utility-network";
+import distance from "@turf/distance";
 import kinks from "@turf/kinks";
 import type {
   Feature,
@@ -127,10 +128,12 @@ describe("generateNetworkFromRoads", () => {
     }
   });
 
-  it("anchors every line's endpoints to the true (unoffset) junction/decision-point location", () => {
+  it("anchors every line's endpoints to an offset junction/decision-point location, exactly matching where present", () => {
     // Real connectivity requirement: a line must actually touch the
     // junction markers at both ends, not just run parallel nearby — and two
-    // chains sharing a node must meet at the exact same coordinate.
+    // chains sharing a node must meet at the exact same coordinate. Junction
+    // markers themselves must never sit on the true (unoffset) road vertex —
+    // see the "never places a junction on the road" tests below.
     const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
       utilityType: "water",
       spacingKm: 0.3,
@@ -139,18 +142,77 @@ describe("generateNetworkFromRoads", () => {
       result.junctions.features.map((f) => f.geometry.coordinates.join(",")),
     );
     // The source/root node also anchors lines but has no junction marker of
-    // its own — SOURCE is [0, 0], the road grid's own origin vertex.
-    junctionCoordKeys.add("0,0");
+    // its own — every line touching it must still share the exact same
+    // (offset, not the true [0, 0]) anchor point as every other such line.
+    const unmatchedEndpointKeys = new Set<string>();
     for (const line of result.lines.features) {
       const first = line.geometry.coordinates[0];
       const last = line.geometry.coordinates[line.geometry.coordinates.length - 1];
+      for (const endpoint of [first, last]) {
+        const key = endpoint.join(",");
+        if (!junctionCoordKeys.has(key)) unmatchedEndpointKeys.add(key);
+      }
+    }
+    assert.equal(
+      unmatchedEndpointKeys.size,
+      1,
+      "every line endpoint must exactly match either a junction or the single shared root anchor point",
+    );
+    assert.ok(
+      !unmatchedEndpointKeys.has("0,0"),
+      "the root anchor must be offset, not the true unoffset source point",
+    );
+  });
+
+  it("never places a junction (or a line's decision-point anchor) on the road — always at least ~3m away", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const roadVertices = GRID_ROADS.features.flatMap((f) => f.geometry.coordinates);
+    const nearestRoadVertexDistanceMeters = (point: number[]): number =>
+      Math.min(
+        ...roadVertices.map((v) => distance(point, v, { units: "kilometers" }) * 1000),
+      );
+
+    for (const junction of result.junctions.features) {
+      const d = nearestRoadVertexDistanceMeters(junction.geometry.coordinates);
       assert.ok(
-        junctionCoordKeys.has(first.join(",")),
-        `line start ${first} should exactly match a junction or the source`,
+        d >= 2.9,
+        `junction at ${junction.geometry.coordinates} must be at least ~3m from the nearest road vertex, was ${d.toFixed(2)}m`,
+      );
+    }
+    // Every line endpoint (including the unmarked root anchor) must also
+    // clear the same distance — the whole main stays off the road, not
+    // just the marked junction dots.
+    for (const line of result.lines.features) {
+      const coords = line.geometry.coordinates;
+      for (const endpoint of [coords[0], coords[coords.length - 1]]) {
+        const d = nearestRoadVertexDistanceMeters(endpoint);
+        assert.ok(
+          d >= 2.9,
+          `line endpoint at ${endpoint} must be at least ~3m from the nearest road vertex, was ${d.toFixed(2)}m`,
+        );
+      }
+    }
+  });
+
+  it("clamps a requested offset below 3m up to the 3m floor for both junctions and lines", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      offsetMeters: 0.5,
+    });
+    const roadVertices = GRID_ROADS.features.flatMap((f) => f.geometry.coordinates);
+    for (const junction of result.junctions.features) {
+      const d = Math.min(
+        ...roadVertices.map(
+          (v) => distance(junction.geometry.coordinates, v, { units: "kilometers" }) * 1000,
+        ),
       );
       assert.ok(
-        junctionCoordKeys.has(last.join(",")),
-        `line end ${last} should exactly match a junction or the source`,
+        d >= 2.9,
+        `junction must still be clamped to at least ~3m even when offsetMeters: 0.5 was requested, was ${d.toFixed(2)}m`,
       );
     }
   });
@@ -169,6 +231,29 @@ describe("generateNetworkFromRoads", () => {
     assert.equal(both.lines.features.length, right.lines.features.length * 2);
     const sides = new Set(both.lines.features.map((f) => f.properties.side));
     assert.deepEqual(sides, new Set(["left", "right"]));
+  });
+
+  it('"both" produces two distinct junctions per node, one on each side of the road', () => {
+    const single = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "right",
+    });
+    const both = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "both",
+    });
+    assert.equal(both.junctions.features.length, single.junctions.features.length * 2);
+    const sides = both.junctions.features.map((f) => f.properties.side);
+    assert.ok(sides.every((s) => s === "left" || s === "right"));
+    assert.equal(sides.filter((s) => s === "left").length, single.junctions.features.length);
+    assert.equal(sides.filter((s) => s === "right").length, single.junctions.features.length);
+
+    // The left/right pair for the same node must be on opposite sides of
+    // the road, not duplicates at the identical point.
+    const coordKeys = both.junctions.features.map((f) => f.geometry.coordinates.join(","));
+    assert.equal(new Set(coordKeys).size, coordKeys.length, "no two junctions should coincide");
   });
 
   it("keeps a multi-vertex road as one continuous line instead of one per graph edge", () => {
@@ -296,14 +381,19 @@ describe("generateNetworkFromRoads", () => {
       crossRoads,
       { utilityType: "water", spacingKm: 10 },
     );
-    const hasJunctionAtIntersection = result.junctions.features.some(
-      (f) =>
-        Math.abs(f.geometry.coordinates[0] - 0.005) < 1e-9 &&
-        Math.abs(f.geometry.coordinates[1] - 0.005) < 1e-9,
-    );
+    // The marker sits near the true intersection, offset off the road
+    // rather than exactly on it (see the "never on the road" tests above) —
+    // so this checks proximity within a small margin around the default 3m
+    // offset, not an exact coordinate match.
+    const distanceMetersFromIntersection = (coords: number[]): number =>
+      distance(coords, [0.005, 0.005], { units: "kilometers" }) * 1000;
+    const hasJunctionNearIntersection = result.junctions.features.some((f) => {
+      const d = distanceMetersFromIntersection(f.geometry.coordinates);
+      return d >= 2.9 && d <= 3.5;
+    });
     assert.ok(
-      hasJunctionAtIntersection,
-      "expected a junction marker at the real 4-way intersection",
+      hasJunctionNearIntersection,
+      "expected a junction marker offset ~3m from the real 4-way intersection",
     );
   });
 

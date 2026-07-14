@@ -1,4 +1,8 @@
-export { generateNetwork, generateNetworkFromRoads } from "./generate-network";
+export {
+  generateNetwork,
+  generateNetworkFromRoads,
+  MIN_OFFSET_METERS,
+} from "./generate-network";
 export type {
   GenerateNetworkOptions,
   GeneratedNetwork,
@@ -9,6 +13,7 @@ export type {
   GenerateNetworkProgressCallback,
 } from "./generate-network";
 export { anchorOffsetLine } from "./anchor-offset-line";
+export { perpendicularOffsetPoint } from "./offset-junction";
 export {
   DEFAULT_UNIT_COSTS,
   DEFAULT_CONTINGENCY_PERCENT,

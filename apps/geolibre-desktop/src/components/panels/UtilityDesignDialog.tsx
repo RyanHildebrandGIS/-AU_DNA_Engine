@@ -8,6 +8,7 @@ import {
 } from "@geolibre/plugins";
 import {
   generateNetwork,
+  MIN_OFFSET_METERS,
   type GenerateNetworkStage,
   type NetworkCoverage,
   type NetworkSide,
@@ -664,10 +665,12 @@ export function UtilityDesignDialog({
                 <Input
                   id="utility-offset-meters"
                   type="number"
-                  min={0}
+                  min={MIN_OFFSET_METERS}
                   step={0.5}
                   value={offsetMeters}
-                  onChange={(e) => setOffsetMeters(Number(e.target.value))}
+                  onChange={(e) =>
+                    setOffsetMeters(Math.max(Number(e.target.value), MIN_OFFSET_METERS))
+                  }
                   className="h-8 w-20"
                 />
                 <span className="text-xs text-muted-foreground">m</span>

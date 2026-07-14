@@ -15,6 +15,7 @@ import { clipLineToArea } from "./clip-to-area";
 import { connectBuildingsToLines } from "./connect-services";
 import { fetchOsmBuildings } from "./fetch-buildings";
 import { fetchOsmRoads } from "./fetch-roads";
+import { perpendicularOffsetPoint } from "./offset-junction";
 import type { OverpassFetchOptions } from "./overpass-client";
 import {
   buildRoadGraph,
@@ -65,7 +66,15 @@ export type GenerateNetworkProgressCallback = (
 export interface GeneratedNetwork {
   junctions: FeatureCollection<
     Point,
-    { id: string; utilityType: string; junctionType: string }
+    {
+      id: string;
+      utilityType: string;
+      junctionType: string;
+      /** Which offset main this junction sits on. Omitted for service-tap
+       * junctions (`junctionsAtServiceTaps`), which already sit on whichever
+       * main they tap and don't need a separate side label. */
+      side?: "left" | "right";
+    }
   >;
   lines: FeatureCollection<
     LineString,
@@ -89,6 +98,18 @@ const DEFAULT_MAX_JUNCTIONS = 500;
 const DEFAULT_OFFSET_METERS = 3;
 const DEFAULT_SIDE: NetworkSide = "right";
 const DEFAULT_MODE: NetworkCoverage = "mainline";
+/**
+ * Junctions (valves/manholes/vaults/etc.) sit in the pipe, not painted on
+ * the pavement — a marker must never land on the road centerline. This is
+ * also the floor for the mainline's own offset: matches the ~10 ft (~3 m)
+ * minimum main-to-road/main separation cited in the municipal design
+ * standards this tool follows (see docs/utility-network.md, "Design
+ * standards"). A user-configured `offsetMeters` below this is clamped up to
+ * it — for both the mainline and its junctions, so they always stay
+ * consistent with each other rather than landing at two different
+ * distances from the road.
+ */
+export const MIN_OFFSET_METERS = 3;
 
 /**
  * Standard industry name for a junction structure, by utility domain — e.g.
@@ -173,7 +194,10 @@ export function generateNetworkFromRoads(
     throw new Error("spacingKm must be a positive number");
   }
   const maxJunctions = options.maxJunctions ?? DEFAULT_MAX_JUNCTIONS;
-  const offsetMeters = options.offsetMeters ?? DEFAULT_OFFSET_METERS;
+  const offsetMeters = Math.max(
+    options.offsetMeters ?? DEFAULT_OFFSET_METERS,
+    MIN_OFFSET_METERS,
+  );
   const side = options.side ?? DEFAULT_SIDE;
 
   // Fetched OSM ways commonly continue past the drawn project-area boundary
@@ -283,21 +307,79 @@ export function generateNetworkFromRoads(
     }
   }
 
-  // Junction markers stay at their true on-road location (unshifted); the
-  // connecting lines are offset from the centerline in the middle of each
-  // chain, but anchor back to this same true location at both ends (see the
-  // line-building loop below) so every line actually touches its junctions.
   const junctionType = junctionTypeLabel(options.utilityType);
-  const junctionFeatures = junctionNodes.map((node, i) =>
-    point(graph.nodes[node], {
-      id: `junction-${i + 1}`,
-      utilityType: options.utilityType,
-      junctionType,
-    }),
-  );
-
   const sides: Array<"left" | "right"> =
     side === "both" ? ["left", "right"] : [side];
+
+  // Real junctions (valves/manholes/vaults/etc.) sit in the pipe, not on the
+  // pavement — every node's anchor position is offset off the centerline by
+  // `offsetMeters`, same as the mainline itself (see MIN_OFFSET_METERS). The
+  // direction comes from ONE of the node's incident chains (whichever reaches
+  // it first, in `chains` order — deterministic, see the chain-building loop
+  // above); every other chain touching the same node on the same side reuses
+  // that exact cached point instead of computing its own, which is what
+  // makes the lines actually meet the junction dot precisely rather than
+  // each drifting to its own natural offset. This is the same
+  // "connectivity over independent per-line visual fidelity" tradeoff
+  // `anchorOffsetLine` already makes (see its doc comment) — now applied one
+  // level up, at the node instead of the line.
+  const chainsByNode = new Map<number, Chain[]>();
+  for (const chain of chains) {
+    for (const node of [chain.startNode, chain.endNode]) {
+      let list = chainsByNode.get(node);
+      if (!list) {
+        list = [];
+        chainsByNode.set(node, list);
+      }
+      list.push(chain);
+    }
+  }
+  const offsetAnchorCache = new Map<string, Position>();
+  const offsetAnchorForNode = (node: number, s: "left" | "right"): Position => {
+    const cacheKey = `${node}:${s}`;
+    const cached = offsetAnchorCache.get(cacheKey);
+    if (cached) return cached;
+
+    const truePosition = graph.nodes[node];
+    const [referenceChain] = chainsByNode.get(node) ?? [];
+    if (!referenceChain) {
+      // Not actually a chain endpoint — shouldn't happen given how
+      // junctionNodes/chains are derived, but fall back to the unoffset
+      // point rather than throwing.
+      offsetAnchorCache.set(cacheKey, truePosition);
+      return truePosition;
+    }
+    // The segment defining the local road direction at this node, always in
+    // the chain's own start->end traversal order (matching how the whole
+    // chain is offset by @turf/line-offset below) regardless of whether this
+    // node is that chain's start or its end.
+    const { coords } = referenceChain;
+    const [segmentStart, segmentEnd] =
+      node === referenceChain.startNode
+        ? [coords[0], coords[1]]
+        : [coords[coords.length - 2], coords[coords.length - 1]];
+    const anchor = perpendicularOffsetPoint(
+      truePosition,
+      segmentStart,
+      segmentEnd,
+      s,
+      offsetMeters,
+    );
+    offsetAnchorCache.set(cacheKey, anchor);
+    return anchor;
+  };
+
+  const junctionFeatures = junctionNodes.flatMap((node, i) =>
+    sides.map((s) =>
+      point(offsetAnchorForNode(node, s), {
+        id: `junction-${i + 1}-${s}`,
+        utilityType: options.utilityType,
+        junctionType,
+        side: s,
+      }),
+    ),
+  );
+
   const lineFeatures: Feature<
     LineString,
     { id: string; utilityType: string; length_km: number; side: "left" | "right" }
@@ -310,19 +392,17 @@ export function generateNetworkFromRoads(
       const offset = lineOffset(centerline, s === "left" ? offsetMeters : -offsetMeters, {
         units: "meters",
       });
-      // Anchor both ends back to the true (unoffset) junction/decision-point
-      // location. Without this, the offset line runs parallel to the
-      // centerline the whole way, never actually touching the junction
-      // marker (which stays at the true on-road point) — and two chains
-      // sharing a node would each be offset independently, leaving a visible
-      // gap between them right at the junction instead of meeting there.
-      // anchorOffsetLine also trims away any overshoot line-offset produces
-      // at a sharp bend and guarantees the result never self-intersects —
-      // see its doc comment.
+      // Anchor both ends to this node's offset anchor position (off the
+      // centerline, never on it) rather than the raw offset line's own
+      // endpoints. Without this, two chains sharing a node would each be
+      // offset independently, leaving a visible gap between them right at
+      // the junction instead of meeting there. anchorOffsetLine also trims
+      // away any overshoot line-offset produces at a sharp bend and
+      // guarantees the result never self-intersects — see its doc comment.
       const anchoredCoords = anchorOffsetLine(
         offset,
-        graph.nodes[chain.startNode],
-        graph.nodes[chain.endNode],
+        offsetAnchorForNode(chain.startNode, s),
+        offsetAnchorForNode(chain.endNode, s),
       );
       lineFeatures.push({
         type: "Feature",

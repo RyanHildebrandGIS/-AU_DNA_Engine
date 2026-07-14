@@ -57,7 +57,8 @@ front doors.
    fiber → "Handhole", anything else → generic "Junction"). A simple
    utility-based lookup for now (`JUNCTION_TYPE_LABELS` in
    `generate-network.ts`), not a rules-driven pick between e.g. a dead-end
-   and a real intersection.
+   and a real intersection. Junction markers are **never placed on the road
+   itself** — see step 6 for how they're offset alongside the mainline.
 5. **Connect to source** — Dijkstra's algorithm from the source node produces
    a shortest-path **tree** over the real road graph; the union of every edge
    along every junction's path back to the source becomes the line network
@@ -79,24 +80,47 @@ front doors.
    fully enclose every street that should connect, not just up to its
    frontage.
 6. **Offset** — each line is offset perpendicular to the road centerline by
-   `offsetMeters`, to one or both sides (`side: "left" | "right" | "both"`),
-   then **anchored back to the true (unoffset) junction/decision-point
-   location at both of its endpoints** via `anchor-offset-line.ts`. Without
-   this, an offset line runs parallel to the centerline for its whole length
-   and never actually touches the junction marker sitting on the true on-road
-   point, and two chains sharing a node would each be offset independently,
-   leaving a visible gap right at the junction instead of meeting there.
+   `offsetMeters` (floored to `MIN_OFFSET_METERS`, 3 m — see below), to one or
+   both sides (`side: "left" | "right" | "both"`), then **anchored to an
+   offset anchor position at both of its endpoints** via
+   `anchor-offset-line.ts`, instead of the true (on-road) junction/
+   decision-point coordinate. A junction sitting exactly on the road
+   centerline is unrealistic — a valve or manhole sits in the pipe, not
+   painted on the pavement — so every junction marker, and every line
+   endpoint that meets one, is offset the same `offsetMeters` distance off
+   the centerline, perpendicular to the road, on the matching side
+   (`offset-junction.ts`'s `perpendicularOffsetPoint`, using `@turf/bearing` +
+   `@turf/destination`). A user-requested `offsetMeters` below 3 m is clamped
+   up to 3 m for **both** the mainline and its junctions, so they always stay
+   at the same distance from the road as each other — matching the ~10 ft
+   (~3 m) minimum main-to-road separation cited in the design standards below.
+   `side: "both"` produces two full sets of junction markers (one per side),
+   not one shared marker, since two parallel mains really do have two
+   separate valves/manholes at each cross street.
+
+   Each node's offset anchor position is computed **once** (from whichever of
+   its incident chains is encountered first while walking the tree — see
+   `generate-network.ts`'s `offsetAnchorForNode`) and cached per `(node,
+   side)`, so every chain sharing that node reuses the exact same point
+   rather than drifting to its own independently-computed offset. This is the
+   same "connectivity over independent per-line visual fidelity" tradeoff
+   `anchorOffsetLine` already makes at the line level — a real 3+ way
+   intersection's roads don't all point the same direction, so only one of
+   them can define "the" perpendicular; the rest bend slightly to still meet
+   it exactly rather than drawing a visible gap.
+
    Every generated line's endpoints are therefore guaranteed to exactly match
-   a junction (or the source) — connectivity, not just visual proximity.
-   `@turf/line-offset`'s mitered joins can overshoot past a sharp bend, which
-   a naive prepend/append of the true endpoint could turn into a
-   self-intersecting spike right next to the junction; `anchorOffsetLine`
-   trims the offset line to the span between where it lands closest to each
-   true endpoint first, and as an unconditional final guarantee checks the
-   result with `@turf/kinks`, falling back to a plain straight line between
-   the two true endpoints (a single segment, which can never self-intersect)
-   if it still does. **Lines never self-intersect**, even at the cost of
-   losing the offset's visual detail in that rare fallback case.
+   a junction (or the source's own offset anchor, which has no marker of its
+   own) — connectivity, not just visual proximity. `@turf/line-offset`'s
+   mitered joins can overshoot past a sharp bend, which a naive
+   prepend/append of the anchor point could turn into a self-intersecting
+   spike right next to the junction; `anchorOffsetLine` trims the offset line
+   to the span between where it lands closest to each anchor point first, and
+   as an unconditional final guarantee checks the result with `@turf/kinks`,
+   falling back to a plain straight line between the two anchor points (a
+   single segment, which can never self-intersect) if it still does. **Lines
+   never self-intersect**, even at the cost of losing the offset's visual
+   detail in that rare fallback case.
 7. **Services** (`mode: "mainlineAndServices"` only) — fetches OSM building
    footprints in the drawn area (`fetch-buildings.ts`, a second Overpass
    query, `way["building"](poly:"...")`) and connects each one to the
@@ -155,8 +179,9 @@ matches this tool's defaults reasonably well:
   point is always the perpendicular foot), validating the nearest-point
   approach in step 7 rather than it being an arbitrary simplification.
 - **Minimum main-to-main separation is commonly around 10 ft (~3 m)** in these
-  manuals, which is in the same range as this tool's `DEFAULT_OFFSET_METERS`
-  (3 m) default for how far a line sits from the road centerline.
+  manuals, which is why this tool enforces `MIN_OFFSET_METERS` (3 m) as a
+  hard floor — not just a default — for how far both the mainline **and its
+  junctions** sit from the road centerline, matching `DEFAULT_OFFSET_METERS`.
 
 None of this is pipe-sizing, hydraulic, or gravity-slope engineering — those
 remain explicitly out of scope (see below) — this is specifically about
@@ -180,11 +205,15 @@ actually generates.
   junctions at exact regular intervals; snapping means a junction can be off
   by up to half the distance between two real road vertices. A reasonable
   first pass, not pixel-perfect.
-- **Junction markers themselves are not offset** — they stay at the true
-  on-road point, matching the anchor point each connecting line's endpoints
-  snap back to (see step 6 above). This is what actually makes them connect;
-  it just means a junction marker sits exactly on the centerline rather than
-  to the side of it, even though the pipe run passing through it is offset.
+- **A multi-way intersection's offset anchor point only reflects one of its
+  roads' directions, not all of them.** `offsetAnchorForNode` picks whichever
+  incident chain is encountered first to compute the perpendicular offset
+  direction; every other chain meeting at that same node bends slightly to
+  meet that exact point instead of using its own natural perpendicular. At a
+  true 4-way intersection where the two roads aren't parallel, this means the
+  junction (and the point where each line meets it) isn't equidistant from
+  every connecting road in a strict geometric sense — a reasonable
+  approximation, not a rules-driven "true" intersection offset solve.
 - **Area clipping is vertex-level, not true segment/polygon boundary
   counting** — a road segment that dips outside the drawn area and back in
   without either endpoint actually leaving the area (a very sharp concave
