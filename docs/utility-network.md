@@ -19,7 +19,11 @@ front doors.
    roads) and `road` (OSM's placeholder for a road not yet classified,
    common on older roads never reclassified after initial mapping) are
    included since they carry real vehicle traffic. Neither is filtered by
-   `access`/`motor_vehicle` tags — see "Known simplifications" below. Returns
+   `access`/`motor_vehicle` tags by default — pass `excludePrivateAccess:
+   true` to exclude ways tagged `access=private`/`no` or
+   `motor_vehicle=no` (an opt-in Overpass QL clause, not a default, since
+   plenty of legitimately driven rural roads carry these tags — see "Known
+   simplifications" below). Returns
    a plain LineString `FeatureCollection`. This is the only
    network call; everything after this step is synchronous and local.
    `queryOverpassWays` (`overpass-client.ts`, shared with the buildings fetch)
@@ -54,11 +58,26 @@ front doors.
    Every junction feature carries a `junctionType` property — the standard
    industry name for that utility's junction structure (water → "Valve",
    sewer → "Manhole", stormwater → "Catch Basin", electric → "Vault",
-   fiber → "Handhole", anything else → generic "Junction"). A simple
-   utility-based lookup for now (`JUNCTION_TYPE_LABELS` in
-   `generate-network.ts`), not a rules-driven pick between e.g. a dead-end
-   and a real intersection. Junction markers are **never placed on the road
-   itself** — see step 6 for how they're offset alongside the mainline.
+   fiber → "Handhole", anything else → generic "Junction"). A real dead end
+   (zero tree children — a true termination, not just truncated by
+   `maxJunctions`) gets a flushing-point label instead (water → "Blow-off",
+   sewer/stormwater → "Cleanout"; electric/fiber have no distinct standard
+   dead-end structure and keep the normal label) — every junction carries an
+   `isDeadEnd` boolean so a caller can tell which label applies. This is
+   still a simple utility-based lookup (`JUNCTION_TYPE_LABELS` /
+   `DEAD_END_JUNCTION_TYPE_LABELS` in `generate-network.ts`), not a fully
+   rules-driven pick across every possible fitting type. Junction markers
+   are **never placed on the road itself** — see step 6 for how they're
+   offset alongside the mainline.
+
+   A dead end also carries `deadEndRunKm` (its unlooped run length: the
+   tree distance back to the nearest *real* branch — one with more than one
+   child — or the source, walking through any number of plain spacing
+   junctions in between, since those don't themselves split the run) and
+   `exceedsMaxDeadEndLength` (true when that exceeds `maxDeadEndKm`, default
+   0.18 km / ~180 m / 600 ft). This only flags — it never rejects, shortens,
+   or loops the run; a long dead end is still generated exactly as the road
+   network dictates, just marked for review.
 5. **Connect to source** — Dijkstra's algorithm from the source node produces
    a shortest-path **tree** over the real road graph; the union of every edge
    along every junction's path back to the source becomes the line network
@@ -153,6 +172,41 @@ front doors.
    point also gets its own junction marker — a real tap is a real fitting on
    the main, so it can be worth showing as a junction distinct from the
    road-spacing/intersection junctions above. Off by default.
+8. **Pipe sizing and casing** (`generate-network.ts`, `road-class-lookup.ts`)
+   — two illustrative attributes derived from the road hierarchy the
+   mainline actually follows, via `RoadClassLookup` (maps every consecutive
+   coordinate pair across the fetched roads to that road's `highway` class,
+   since the routing graph itself only tracks coordinates/distances, not
+   which original road contributed each edge):
+   - Every line gets `pipeSizeMm`, an illustrative planning-level size
+     picked from a 3-tier lookup (`PIPE_SIZE_MM_BY_TIER`) keyed by the
+     chain's representative road class — "arterials carry transmission
+     mains, residentials carry distribution" is the common framing. The
+     representative class is the chain's *first* segment's class (a chain
+     can technically span more than one original road's worth of vertices —
+     see "Known simplifications"). **Not a hydraulic design size** — real
+     sizing needs demand/fire-flow calculations this tool doesn't do.
+   - Every junction gets `crossesMajorRoad`, true when any of its incident
+     graph edges is primary class or above (`MAJOR_HIGHWAY_MIN_RANK`) — a
+     common casing-requirement trigger ("mains crossing motorway/trunk/
+     railway are cased"; primary is included too since it's often treated
+     the same way). Checked only at chain endpoints, not every interior
+     vertex, specifically to avoid a mainline that merely runs *alongside* a
+     major road for a long stretch registering as "crossing" it repeatedly
+     from floating-point wiggle between two nearly-parallel lines — see
+     "Known simplifications" for the tradeoff this creates.
+9. **Hydrants** (`includeHydrants: true`) — sampled directly along the
+   finished, already-offset mainline at `hydrantSpacingKm` intervals
+   (default 0.15 km / ~150 m / 500 ft, a typical residential fire-code
+   figure — commercial/high-density areas commonly want tighter spacing,
+   ~90 m/300 ft, left to the caller) via the same `@turf/along` +
+   `@turf/length` walk `placeJunctionsAlongRoads` uses on the raw roads, just
+   applied to the finished lines instead. Hydrants don't need to coincide
+   with a junction/decision point the way a line's endpoint does, so they
+   aren't snapped to graph nodes at all — wherever the fixed interval lands
+   on the offset line is where the hydrant goes. Meaningful for any utility
+   type structurally, but standard fire-hydrant spacing specifically applies
+   to water; off by default.
 
 ## Design standards
 
@@ -182,11 +236,57 @@ matches this tool's defaults reasonably well:
   manuals, which is why this tool enforces `MIN_OFFSET_METERS` (3 m) as a
   hard floor — not just a default — for how far both the mainline **and its
   junctions** sit from the road centerline, matching `DEFAULT_OFFSET_METERS`.
+  This is also the standard usually cited for **water-to-sewer horizontal
+  separation** specifically — generating two utility types for the same
+  project and picking opposite sides (e.g. water on `side: "right"`, sewer
+  on `side: "left"`) already satisfies it structurally, since each utility's
+  own mainline independently maintains that same 3 m-minimum clearance from
+  the shared road centerline in the opposite direction. Nothing extra to
+  configure; a natural consequence of how offsetting already works.
+- **Dead ends require a flushing point** (a blow-off for water, commonly a
+  cleanout for sewer/stormwater) so the main can be flushed without an
+  isolating valve on both sides. Matches step 4: every dead end is
+  unconditionally detected already (0 tree children), so relabeling it with
+  the flushing-point name instead of the normal junction type was close to
+  free once dead ends were already being found.
+- **Manuals commonly cap unlooped dead-end run length** (a frequently cited
+  figure is ~180 m / 600 ft) or require special justification (extra
+  flushing, larger pipe) beyond it. Matches `maxDeadEndKm` — flagged via
+  `exceedsMaxDeadEndLength`, not enforced by changing the network's
+  topology, since a real dead end that's "too long" is a design conversation
+  (loop it back, oversize it, add an interim flushing point), not something
+  a generator should silently alter.
+- **Fire hydrant spacing follows fire-code tables**, commonly ~150 m/500 ft
+  residential and tighter (~90 m/300 ft) for commercial/high-density areas —
+  a different interval than valve spacing, generated by the same spacing
+  mechanism (see step 9), left fully configurable since there's no single
+  correct number across jurisdictions.
+- **Mains crossing a motorway/trunk/railway are commonly cased** to protect
+  the pipe and allow future maintenance without disturbing the major
+  road. Matches step 8's `crossesMajorRoad` flag — an attribute to review,
+  not a generated casing detail (this tool doesn't model casing pipe
+  geometry, just flags where it's likely required).
+- **Pipe/conduit sizing generally follows road hierarchy** — arterials carry
+  transmission mains, residential streets carry distribution mains. Matches
+  step 8's `pipeSizeMm`, an illustrative planning-level attribute from a
+  3-tier lookup, explicitly **not** a hydraulic design size (see "Explicitly
+  out of scope").
+- **Valve (or vault/manhole) placement at intersections commonly follows an
+  "N-1" rule**: a tee gets 2 valves and a cross gets 3 (every leg but one),
+  so a single break can be isolated to a minimal area. **This tool does not
+  yet implement per-leg N-1 valving** — it places exactly one junction
+  marker per intersection node, representing "a junction belongs here,"
+  not the full valve count/placement a real isolation design would need.
+  Doing this properly requires placing a junction per physical road leg
+  (using the raw graph's degree at that node, not just its tree-child
+  count) and choosing which leg to omit — a real geometry and design-rules
+  addition, not a quick attribute, and deliberately not attempted here yet.
+  See "Explicitly out of scope."
 
-None of this is pipe-sizing, hydraulic, or gravity-slope engineering — those
-remain explicitly out of scope (see below) — this is specifically about
-where junctions, spacing, and service taps go, which is the part this tool
-actually generates.
+None of this is hydraulic or gravity-slope engineering (pipe sizing here is
+illustrative, not calculated from demand/fire-flow) — this is specifically
+about where junctions, spacing, service taps, hydrants, and casing/sizing
+attributes go, which is the part this tool actually generates.
 
 ## Known simplifications
 
@@ -246,13 +346,57 @@ actually generates.
   of the crossing check (building × candidate × building) for large project
   areas. A building whose nearest 5 candidates are all blocked but whose 6th
   would have worked is skipped rather than found.
+- **`crossesMajorRoad` also flags a chain endpoint that merely *starts on* a
+  major road, not only ones that geometrically cross one.** Checking only at
+  chain endpoints (see step 8) avoids the far worse false-positive of a
+  mainline running *alongside* a major road for a long stretch registering
+  as "crossing" it repeatedly, but conflates two different real standards:
+  perpendicular casing (crossing under/through) and parallel encasement
+  (running near/along). A reasonable approximation given the tradeoff, not
+  a precise crossing-angle solve.
+- **`pipeSizeMm`'s "representative road class" is the chain's first segment,
+  not an analysis of every segment in it.** A chain can span more than one
+  original road's worth of vertices when a pass-through node isn't a
+  decision point — if that stretch changes highway class partway through
+  (e.g. residential becoming tertiary with no branch in between), the whole
+  chain still gets one size, from whichever class comes first.
+- **`deadEndRunKm` is computed from tree distance, not the actual generated
+  line geometry.** It sums real road distances along the shortest-path tree
+  back to the nearest real branch, which is what standards mean by "unlooped
+  run length" — the small amount added/removed by offsetting doesn't change
+  which runs are flagged in practice, but the two numbers aren't bit-for-bit
+  identical.
+- **Hydrant spacing is independent of junction spacing** — hydrants are
+  sampled fresh along the finished mainline at their own interval, not
+  reused from or aligned with the `spacingKm` junction candidates, so a
+  hydrant and a junction can end up very close together or with an
+  arbitrary offset between them. A hydrant marker is not itself a junction
+  (no `junctionType`/`isDeadEnd` properties) and isn't counted toward
+  `maxJunctions`.
+- **`excludePrivateAccess` is all-or-nothing** — there's no way to exclude
+  `access=private` on `track`s specifically while keeping it on
+  `residential` roads, or vice versa; one flag applies the same filter
+  across every drivable class in the request.
 
 ## Explicitly out of scope
 
-- Domain-specific rules: pipe/cable sizing, slope/elevation-aware gravity
-  sewer routing, valve or vault placement at intersections.
-- Cost/quantity takeoff.
+- Hydraulic/engineering-grade pipe sizing (demand and fire-flow
+  calculations) and slope/elevation-aware gravity sewer routing —
+  `pipeSizeMm` (step 8) is an illustrative road-hierarchy lookup, not a
+  calculated size.
+- Per-leg "N-1" valve placement at intersections (a tee gets 2 valves, a
+  cross gets 3) — see "Design standards" above for what a real
+  implementation would need. Currently one junction marker represents "a
+  junction belongs here," not the full isolation-design valve count.
+- Air-release valves at high points — these need elevation data (a DEM) this
+  tool doesn't fetch or use anywhere else; the lowest-priority gap of the
+  ones considered so far, specifically because of that new data dependency.
 - A self-hosted Overpass instance UI (there's no per-run endpoint override in
   the wizard yet, unlike the routing/Valhalla tools' `VITE_ROUTING_ENDPOINT`
   pattern — `fetchOsmRoads`'s `endpoint` option exists for this, just not
   wired to a Settings field yet).
+
+Cost/quantity takeoff is **not** out of scope — see the Cost panel and
+`@geolibre/utility-network`'s `estimateNetworkCost`, which price a
+generated network's junctions/lines/services against an editable
+per-utility-type unit-cost template.

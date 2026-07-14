@@ -2,6 +2,8 @@ export {
   generateNetwork,
   generateNetworkFromRoads,
   MIN_OFFSET_METERS,
+  DEFAULT_MAX_DEAD_END_KM,
+  DEFAULT_HYDRANT_SPACING_KM,
 } from "./generate-network";
 export type {
   GenerateNetworkOptions,
@@ -14,6 +16,7 @@ export type {
 } from "./generate-network";
 export { anchorOffsetLine } from "./anchor-offset-line";
 export { perpendicularOffsetPoint } from "./offset-junction";
+export { RoadClassLookup } from "./road-class-lookup";
 export {
   DEFAULT_UNIT_COSTS,
   DEFAULT_CONTINGENCY_PERCENT,

@@ -1,3 +1,4 @@
+import along from "@turf/along";
 import { featureCollection, lineString, point } from "@turf/helpers";
 import length from "@turf/length";
 import lineOffset from "@turf/line-offset";
@@ -17,6 +18,7 @@ import { fetchOsmBuildings } from "./fetch-buildings";
 import { fetchOsmRoads } from "./fetch-roads";
 import { perpendicularOffsetPoint } from "./offset-junction";
 import type { OverpassFetchOptions } from "./overpass-client";
+import { RoadClassLookup } from "./road-class-lookup";
 import {
   buildRoadGraph,
   placeJunctionsAlongRoads,
@@ -44,6 +46,14 @@ export interface GenerateNetworkOptions {
   maxServices?: number;
   /** Also add a junction marker at every service's tap point on the mainline. Only applies when mode is "mainlineAndServices". Defaults to false. */
   junctionsAtServiceTaps?: boolean;
+  /** Exclude fetched roads tagged access=private/no or motor_vehicle=no. Only affects the async `generateNetwork` (it controls the road fetch); has no effect on `generateNetworkFromRoads`, which takes already-fetched roads. Defaults to false — see `FetchOsmRoadsOptions.excludePrivateAccess`. */
+  excludePrivateAccess?: boolean;
+  /** Dead-end runs longer than this are flagged via `exceedsMaxDeadEndLength`/`deadEndRunKm` on the junction feature and counted in `deadEndsExceedingMaxLength` — not rejected or altered. Defaults to 0.18 km (~180 m / 600 ft), a commonly cited cap on unlooped main length. */
+  maxDeadEndKm?: number;
+  /** Also generate a `hydrants` layer spaced along the finished mainline. Meaningful for any utility type, but standard fire-hydrant spacing specifically applies to water. Defaults to false. */
+  includeHydrants?: boolean;
+  /** Spacing between hydrants, in kilometers, when `includeHydrants` is set. Defaults to 0.15 km (~150 m / 500 ft), a typical residential fire-code figure — tighter commercial spacing (~90 m/300 ft) is a real per-project decision, not a fixed constant. */
+  hydrantSpacingKm?: number;
 }
 
 /** Coarse stages of {@link generateNetwork}, for driving a progress UI —
@@ -74,14 +84,42 @@ export interface GeneratedNetwork {
        * junctions (`junctionsAtServiceTaps`), which already sit on whichever
        * main they tap and don't need a separate side label. */
       side?: "left" | "right";
+      /** True for a real dead end (no further branches) — `junctionType` is
+       * then a flushing structure (Blow-off/Cleanout) instead of the normal
+       * Valve/Manhole/etc. */
+      isDeadEnd: boolean;
+      /** Only present when `isDeadEnd` is true: the unlooped run length (km)
+       * back to the nearest real branch or the source. */
+      deadEndRunKm?: number;
+      /** Only present when `isDeadEnd` is true: whether `deadEndRunKm`
+       * exceeds `maxDeadEndKm` — flagged, not rejected or altered. */
+      exceedsMaxDeadEndLength?: boolean;
+      /** True when this node has an incident road of primary class or
+       * above — a common casing-requirement trigger. Omitted for
+       * service-tap junctions (not checked there — see `generate-network.ts`
+       * for why). */
+      crossesMajorRoad?: boolean;
     }
   >;
   lines: FeatureCollection<
     LineString,
-    { id: string; utilityType: string; length_km: number; side: "left" | "right" }
+    {
+      id: string;
+      utilityType: string;
+      length_km: number;
+      side: "left" | "right";
+      /** Illustrative planning-level size (mm) picked from the road
+       * hierarchy the mainline follows at this chain — see
+       * `PIPE_SIZE_MM_BY_TIER` in `generate-network.ts`. Not a hydraulic
+       * design size. */
+      pipeSizeMm: number;
+    }
   >;
   /** Building-to-mainline service connections; empty unless mode is "mainlineAndServices". */
   services: FeatureCollection<LineString, { id: string }>;
+  /** Hydrants sampled along the finished mainline at `hydrantSpacingKm`
+   * intervals; empty unless `includeHydrants` is set. */
+  hydrants: FeatureCollection<Point, { id: string; utilityType: string }>;
   /** True if the candidate junction count exceeded maxJunctions and was truncated. */
   truncated: boolean;
   /** True if the building count exceeded maxServices and was truncated. */
@@ -92,12 +130,88 @@ export interface GeneratedNetwork {
   servicesBlocked: boolean;
   /** Count of buildings skipped for that reason. */
   servicesBlockedCount: number;
+  /** Count of dead ends whose unlooped run length exceeds `maxDeadEndKm` —
+   * flagged for review, not rejected or altered. */
+  deadEndsExceedingMaxLength: number;
 }
 
 const DEFAULT_MAX_JUNCTIONS = 500;
 const DEFAULT_OFFSET_METERS = 3;
 const DEFAULT_SIDE: NetworkSide = "right";
 const DEFAULT_MODE: NetworkCoverage = "mainline";
+/** ~180 m / 600 ft — a commonly cited cap on unlooped dead-end main length
+ * in municipal design manuals (see docs/utility-network.md). */
+export const DEFAULT_MAX_DEAD_END_KM = 0.18;
+/** ~150 m / 500 ft — a typical residential fire-hydrant spacing figure.
+ * Commercial/high-density areas commonly call for tighter spacing (~90 m);
+ * left to the caller via `hydrantSpacingKm`, not baked in as a fixed rule. */
+export const DEFAULT_HYDRANT_SPACING_KM = 0.15;
+
+/**
+ * Coarse OSM `highway` classification hierarchy — higher means a bigger
+ * road. Shared by pipe-size-by-hierarchy and major-road-crossing detection
+ * below; `_link` ramps rank with their parent class.
+ */
+const HIGHWAY_RANK: Record<string, number> = {
+  motorway: 6,
+  motorway_link: 6,
+  trunk: 5,
+  trunk_link: 5,
+  primary: 4,
+  primary_link: 4,
+  secondary: 3,
+  secondary_link: 3,
+  tertiary: 2,
+  tertiary_link: 2,
+  unclassified: 1,
+  residential: 1,
+  living_street: 1,
+  service: 1,
+  track: 1,
+  road: 1,
+};
+const DEFAULT_HIGHWAY_RANK = 1;
+function highwayRank(highwayClass: string): number {
+  return HIGHWAY_RANK[highwayClass] ?? DEFAULT_HIGHWAY_RANK;
+}
+/** Primary and above — the "carries a transmission main" / "requires casing
+ * when crossed" tier boundary many manuals draw. Motorway/trunk/railway
+ * crossings are the most commonly cited casing triggers; primary is
+ * included too since it's frequently treated the same way. */
+const MAJOR_HIGHWAY_MIN_RANK = 4;
+
+type PipeSizeTier = "major" | "secondary" | "local";
+function pipeSizeTier(highwayClass: string): PipeSizeTier {
+  const rank = highwayRank(highwayClass);
+  if (rank >= MAJOR_HIGHWAY_MIN_RANK) return "major";
+  if (rank >= 2) return "secondary";
+  return "local";
+}
+
+/**
+ * Illustrative planning-level pipe/conduit sizes (mm) by road hierarchy —
+ * "arterials carry transmission mains, residentials carry distribution" is
+ * the common framing. These are **not** hydraulic design sizes (that needs
+ * demand/fire-flow calculations this tool doesn't do) — a reasonable
+ * starting attribute, the same spirit as `DEFAULT_UNIT_COSTS`, always worth
+ * reviewing against real project requirements.
+ */
+const PIPE_SIZE_MM_BY_TIER: Record<string, Record<PipeSizeTier, number>> = {
+  water: { major: 300, secondary: 200, local: 150 },
+  sewer: { major: 375, secondary: 250, local: 200 },
+  stormwater: { major: 450, secondary: 300, local: 250 },
+  electric: { major: 100, secondary: 75, local: 50 },
+  fiber: { major: 50, secondary: 40, local: 32 },
+};
+const DEFAULT_PIPE_SIZE_MM_BY_TIER: Record<PipeSizeTier, number> = {
+  major: 300,
+  secondary: 200,
+  local: 150,
+};
+function pipeSizeMmFor(utilityType: string, highwayClass: string): number {
+  const tiers = PIPE_SIZE_MM_BY_TIER[utilityType] ?? DEFAULT_PIPE_SIZE_MM_BY_TIER;
+  return tiers[pipeSizeTier(highwayClass)];
+}
 /**
  * Junctions (valves/manholes/vaults/etc.) sit in the pipe, not painted on
  * the pavement — a marker must never land on the road centerline. This is
@@ -113,10 +227,11 @@ export const MIN_OFFSET_METERS = 3;
 
 /**
  * Standard industry name for a junction structure, by utility domain — e.g.
- * a water main junction is a "Valve", a sewer one a "Manhole". A simple
- * utility-based lookup for now, not a rules-driven pick between e.g. a
- * dead-end and a real intersection (see docs/utility-network.md); applied to
- * every junction feature, including service-tap junctions.
+ * a water main junction is a "Valve", a sewer one a "Manhole". Applied to
+ * every intersection/spacing junction and service-tap junction; a true
+ * dead-end (see `DEAD_END_JUNCTION_TYPE_LABELS`) gets its own label instead,
+ * since standard design manuals require a flushing point there, not just
+ * another valve/manhole.
  */
 const JUNCTION_TYPE_LABELS: Record<string, string> = {
   water: "Valve",
@@ -127,7 +242,23 @@ const JUNCTION_TYPE_LABELS: Record<string, string> = {
 };
 const DEFAULT_JUNCTION_TYPE_LABEL = "Junction";
 
-function junctionTypeLabel(utilityType: string): string {
+/**
+ * Dead-end mains need a real flushing/cleanout point, not just another
+ * valve/manhole — a blow-off (water) or cleanout (sewer/stormwater) per
+ * standard design manuals. Electric/fiber dead ends have no distinct
+ * standard structure name, so they fall back to the normal junction label.
+ */
+const DEAD_END_JUNCTION_TYPE_LABELS: Record<string, string> = {
+  water: "Blow-off",
+  sewer: "Cleanout",
+  stormwater: "Cleanout",
+};
+
+function junctionTypeLabel(utilityType: string, isDeadEnd: boolean): string {
+  if (isDeadEnd) {
+    const deadEndLabel = DEAD_END_JUNCTION_TYPE_LABELS[utilityType];
+    if (deadEndLabel) return deadEndLabel;
+  }
   return JUNCTION_TYPE_LABELS[utilityType] ?? DEFAULT_JUNCTION_TYPE_LABEL;
 }
 
@@ -166,7 +297,10 @@ export async function generateNetwork(
     },
   };
   const [roads, buildings] = await Promise.all([
-    fetchOsmRoads(area, fetchOptionsWithProgress),
+    fetchOsmRoads(area, {
+      ...fetchOptionsWithProgress,
+      excludePrivateAccess: options.excludePrivateAccess,
+    }),
     options.mode === "mainlineAndServices"
       ? fetchOsmBuildings(area, fetchOptionsWithProgress)
       : Promise.resolve(undefined),
@@ -220,6 +354,10 @@ export function generateNetworkFromRoads(
   const graph = buildRoadGraph(clippedRoads);
   const rootNode = snapToNearestNode(graph, source.geometry.coordinates);
   const tree = shortestPathTree(graph, rootNode);
+  // Looks up which original road (by highway class) a given segment came
+  // from — used below for pipe-size-by-hierarchy and major-road-crossing
+  // detection, neither of which the routing graph itself tracks.
+  const roadClassLookup = new RoadClassLookup(clippedRoads);
 
   // Full branching structure of the network reachable from the source —
   // every node's tree children, not just the ones on a path to a
@@ -307,7 +445,25 @@ export function generateNetworkFromRoads(
     }
   }
 
-  const junctionType = junctionTypeLabel(options.utilityType);
+  const maxDeadEndKm = options.maxDeadEndKm ?? DEFAULT_MAX_DEAD_END_KM;
+  const isDeadEndNode = (node: number): boolean =>
+    (childrenOf.get(node)?.size ?? 0) === 0;
+  const isRealBranchNode = (node: number): boolean =>
+    (childrenOf.get(node)?.size ?? 0) > 1;
+  // Walks back up the tree from a dead end to the nearest real branch (>1
+  // child) or the root — that ancestor is where a different path splits off,
+  // so the distance between it and the dead end is the unlooped run length
+  // standards like to cap, even when several plain spacing junctions (each
+  // with exactly 1 tree child) sit in between and don't themselves count as
+  // a "real" branch point.
+  const deadEndRunStart = (deadEndNode: number): number => {
+    let current = deadEndNode;
+    while (current !== rootNode && !isRealBranchNode(current)) {
+      current = tree.parent[current];
+    }
+    return current;
+  };
+
   const sides: Array<"left" | "right"> =
     side === "both" ? ["left", "right"] : [side];
 
@@ -369,25 +525,72 @@ export function generateNetworkFromRoads(
     return anchor;
   };
 
-  const junctionFeatures = junctionNodes.flatMap((node, i) =>
-    sides.map((s) =>
+  // A node "crosses a major road" when one of its incident graph edges is a
+  // primary-or-above class — checked only at chain endpoints (real branches,
+  // dead ends, spacing junctions, and the root), not at every interior chain
+  // vertex. This deliberately avoids a geometric intersection test against
+  // the finished offset lines: a mainline running *alongside* a major road
+  // for a long stretch would otherwise register as "crossing" it dozens of
+  // times over from small floating-point wiggle between two nearly-parallel
+  // lines. The tradeoff (see docs/utility-network.md) is that this also
+  // flags a chain endpoint that merely *starts on* a major road, not only
+  // ones that cross one, which conflates two different real standards
+  // (perpendicular casing vs. parallel encasement) — a reasonable
+  // approximation, not a precise crossing-angle solve.
+  const crossesMajorRoad = (node: number): boolean =>
+    (graph.adjacency[node] ?? []).some((edge) => {
+      const cls = roadClassLookup.segmentClass(graph.nodes[node], graph.nodes[edge.to]);
+      return cls !== undefined && highwayRank(cls) >= MAJOR_HIGHWAY_MIN_RANK;
+    });
+
+  let deadEndsExceedingMaxLength = 0;
+  const junctionFeatures = junctionNodes.flatMap((node, i) => {
+    const isDeadEnd = isDeadEndNode(node);
+    const junctionType = junctionTypeLabel(options.utilityType, isDeadEnd);
+    let deadEndRunKm: number | undefined;
+    let exceedsMaxDeadEndLength: boolean | undefined;
+    if (isDeadEnd) {
+      deadEndRunKm = Number(
+        (tree.distanceKm[node] - tree.distanceKm[deadEndRunStart(node)]).toFixed(4),
+      );
+      exceedsMaxDeadEndLength = deadEndRunKm > maxDeadEndKm;
+      if (exceedsMaxDeadEndLength) deadEndsExceedingMaxLength += 1;
+    }
+    return sides.map((s) =>
       point(offsetAnchorForNode(node, s), {
         id: `junction-${i + 1}-${s}`,
         utilityType: options.utilityType,
         junctionType,
         side: s,
+        isDeadEnd,
+        crossesMajorRoad: crossesMajorRoad(node),
+        ...(deadEndRunKm !== undefined ? { deadEndRunKm } : {}),
+        ...(exceedsMaxDeadEndLength !== undefined ? { exceedsMaxDeadEndLength } : {}),
       }),
-    ),
-  );
+    );
+  });
 
   const lineFeatures: Feature<
     LineString,
-    { id: string; utilityType: string; length_km: number; side: "left" | "right" }
+    {
+      id: string;
+      utilityType: string;
+      length_km: number;
+      side: "left" | "right";
+      pipeSizeMm: number;
+    }
   >[] = [];
   let lineId = 1;
   for (const chain of chains) {
     const centerline = lineString(chain.coords);
     const lengthKm = length(centerline, { units: "kilometers" });
+    // The chain's first segment stands in for its road class — a chain can
+    // technically span more than one original road's worth of vertices (see
+    // "Known simplifications"), so this is a representative pick, not a
+    // per-segment analysis.
+    const representativeClass =
+      roadClassLookup.segmentClass(chain.coords[0], chain.coords[1]) ?? "unclassified";
+    const pipeSizeMm = pipeSizeMmFor(options.utilityType, representativeClass);
     for (const s of sides) {
       const offset = lineOffset(centerline, s === "left" ? offsetMeters : -offsetMeters, {
         units: "meters",
@@ -411,6 +614,7 @@ export function generateNetworkFromRoads(
           utilityType: options.utilityType,
           length_km: Number(lengthKm.toFixed(4)),
           side: s,
+          pipeSizeMm,
         },
         geometry: { type: "LineString", coordinates: anchoredCoords },
       });
@@ -418,6 +622,33 @@ export function generateNetworkFromRoads(
   }
 
   const lines = featureCollection(lineFeatures);
+
+  // Hydrants are sampled directly along the finished, already-offset
+  // mainline (the same @turf/along + @turf/length pattern
+  // placeJunctionsAlongRoads uses on the raw roads) rather than snapped to
+  // graph nodes — a hydrant taps the main wherever it happens to fall at a
+  // fixed interval, it doesn't need to coincide with a junction/decision
+  // point the way a line's endpoint does.
+  const hydrantFeatures = options.includeHydrants
+    ? lines.features.flatMap((line) => {
+        const hydrantSpacingKm = Math.max(
+          options.hydrantSpacingKm ?? DEFAULT_HYDRANT_SPACING_KM,
+          0.001,
+        );
+        const totalKm = length(line, { units: "kilometers" });
+        const points: Position[] = [];
+        for (let d = 0; d <= totalKm; d += hydrantSpacingKm) {
+          points.push(along(line, d, { units: "kilometers" }).geometry.coordinates);
+        }
+        return points;
+      })
+    : [];
+  const hydrants = featureCollection(
+    hydrantFeatures.map((coords, i) =>
+      point(coords, { id: `hydrant-${i + 1}`, utilityType: options.utilityType }),
+    ),
+  );
+
   const mode = options.mode ?? DEFAULT_MODE;
   const {
     services,
@@ -447,7 +678,8 @@ export function generateNetworkFromRoads(
             point(tapPoint.geometry.coordinates, {
               id: `service-junction-${i + 1}`,
               utilityType: options.utilityType,
-              junctionType,
+              junctionType: junctionTypeLabel(options.utilityType, false),
+              isDeadEnd: false,
             }),
           ),
         ]
@@ -457,9 +689,11 @@ export function generateNetworkFromRoads(
     junctions: featureCollection(allJunctionFeatures),
     lines,
     services,
+    hydrants,
     truncated,
     servicesTruncated,
     servicesBlocked,
     servicesBlockedCount,
+    deadEndsExceedingMaxLength,
   };
 }

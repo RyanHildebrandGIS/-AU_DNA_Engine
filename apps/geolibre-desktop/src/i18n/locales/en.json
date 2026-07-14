@@ -2064,6 +2064,11 @@
       "mainlineAndServices": "Mainline + services"
     },
     "junctionsAtServiceTaps": "Add junctions at service connections",
+    "standardsTitle": "Design standards",
+    "excludePrivateAccess": "Exclude private/gated roads",
+    "maxDeadEndKmLabel": "Flag dead ends longer than",
+    "includeHydrants": "Generate hydrants",
+    "hydrantSpacingLabel": "Hydrant spacing",
     "generate": "Generate network",
     "generating": "Generating…",
     "progress": {
@@ -2079,6 +2084,8 @@
     "resultTruncated": "Junction count was capped — try a larger spacing.",
     "resultServicesTruncated": "Service connection count was capped — try a smaller project area.",
     "resultServicesBlocked": "{{count}} building(s) were not connected because every path to the mainline would cross a neighboring property.",
+    "resultHydrants": "{{count}} hydrants generated.",
+    "resultDeadEndsExceeding": "{{count}} dead end(s) exceed the flagged run-length threshold.",
     "roadNoticeTitle": "Fetching road data",
     "roadNoticeDesc": "Generating a network sends the coordinates of your drawn project area to the public OpenStreetMap Overpass API, so the pipe network can follow real roads. No account or API key is needed, but the request goes to a shared public server."
   },

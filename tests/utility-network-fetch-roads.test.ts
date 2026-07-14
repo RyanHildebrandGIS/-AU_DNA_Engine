@@ -77,6 +77,33 @@ describe("fetchOsmRoads", () => {
     }
   });
 
+  it("does not filter by access tags by default", async (t) => {
+    let capturedBody: string | undefined;
+    t.mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+    });
+
+    await fetchOsmRoads(AREA);
+
+    const decoded = decodeURIComponent(capturedBody!.replace(/^data=/, ""));
+    assert.doesNotMatch(decoded, /access|motor_vehicle/);
+  });
+
+  it("appends an access-tag exclusion filter when excludePrivateAccess is set", async (t) => {
+    let capturedBody: string | undefined;
+    t.mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+    });
+
+    await fetchOsmRoads(AREA, { excludePrivateAccess: true });
+
+    const decoded = decodeURIComponent(capturedBody!.replace(/^data=/, ""));
+    assert.match(decoded, /"access"!~"\^\(private\|no\)\$"/);
+    assert.match(decoded, /"motor_vehicle"!~"\^no\$"/);
+  });
+
   it("parses Overpass way elements with inline geometry into LineString features", async (t) => {
     t.mock.method(globalThis, "fetch", async () =>
       new Response(

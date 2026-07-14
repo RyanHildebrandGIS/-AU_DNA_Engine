@@ -4,8 +4,19 @@ import {
   type OverpassFetchOptions,
 } from "./overpass-client";
 
-export type { OverpassFetchOptions as FetchOsmRoadsOptions } from "./overpass-client";
 export { DEFAULT_OVERPASS_ENDPOINT } from "./overpass-client";
+
+export interface FetchOsmRoadsOptions extends OverpassFetchOptions {
+  /**
+   * Exclude ways tagged `access=private`/`access=no`/`motor_vehicle=no`.
+   * Off by default: plenty of legitimately driven rural roads (especially
+   * `track`s serving a single farm/property) carry these tags, and a utility
+   * mainline generally still needs to reach them — see the "known
+   * simplifications" note in docs/utility-network.md. Opt in when a project
+   * specifically needs to avoid gated/private roads.
+   */
+  excludePrivateAccess?: boolean;
+}
 
 /**
  * OSM `highway` values that carry real vehicle traffic — a utility mainline
@@ -21,8 +32,10 @@ export { DEFAULT_OVERPASS_ENDPOINT } from "./overpass-client";
  * road whose real classification hasn't been surveyed/entered yet — both are
  * common on older rural roads that were never reclassified after initial
  * mapping, which is exactly the kind of road a user has reported missing.
- * Neither is filtered by `access`/`motor_vehicle` tags (e.g. a `track` marked
- * `access=private` is still fetched) — see docs/utility-network.md.
+ * Neither is filtered by `access`/`motor_vehicle` tags by default (e.g. a
+ * `track` marked `access=private` is still fetched) — see
+ * `FetchOsmRoadsOptions.excludePrivateAccess` for an opt-in filter, and
+ * docs/utility-network.md.
  */
 const DRIVABLE_HIGHWAY_VALUES = [
   "motorway",
@@ -44,6 +57,15 @@ const DRIVABLE_HIGHWAY_VALUES = [
 ];
 
 const DRIVABLE_HIGHWAY_FILTER = `["highway"~"^(${DRIVABLE_HIGHWAY_VALUES.join("|")})$"]`;
+/**
+ * Appended to the highway filter only when `excludePrivateAccess` is set.
+ * Overpass QL's `!~` matches elements where the tag is either absent or
+ * present with a non-matching value — so a way with no `access`/
+ * `motor_vehicle` tag at all (the vast majority) still passes both clauses;
+ * only an explicit private/no value excludes it.
+ */
+const PRIVATE_ACCESS_EXCLUSION_FILTER =
+  '["access"!~"^(private|no)$"]["motor_vehicle"!~"^no$"]';
 
 /**
  * Fetches OSM road centerlines for the given project-area polygon via the
@@ -60,9 +82,12 @@ const DRIVABLE_HIGHWAY_FILTER = `["highway"~"^(${DRIVABLE_HIGHWAY_VALUES.join("|
  */
 export async function fetchOsmRoads(
   area: Feature<Polygon | MultiPolygon>,
-  options: OverpassFetchOptions = {},
+  options: FetchOsmRoadsOptions = {},
 ): Promise<FeatureCollection<LineString, { highway: string }>> {
-  const ways = await queryOverpassWays(area, DRIVABLE_HIGHWAY_FILTER, options);
+  const filter = options.excludePrivateAccess
+    ? `${DRIVABLE_HIGHWAY_FILTER}${PRIVATE_ACCESS_EXCLUSION_FILTER}`
+    : DRIVABLE_HIGHWAY_FILTER;
+  const ways = await queryOverpassWays(area, filter, options);
   const features: Feature<LineString, { highway: string }>[] = [];
   for (const way of ways) {
     if (!way.geometry || way.geometry.length < 2) continue;

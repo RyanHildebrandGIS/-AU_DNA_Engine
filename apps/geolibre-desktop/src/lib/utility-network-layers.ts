@@ -10,7 +10,7 @@ import type { NetworkQuantities } from "@geolibre/utility-network";
  * "networks generated this session" that could drift from the actual layers
  * (which are already the project's source of truth and survive save/load).
  */
-export type UtilityNetworkLayerRole = "junctions" | "lines" | "services";
+export type UtilityNetworkLayerRole = "junctions" | "lines" | "services" | "hydrants";
 
 export interface UtilityNetworkLayerMetadata {
   utilityNetworkRole: UtilityNetworkLayerRole;
@@ -27,7 +27,10 @@ export function utilityNetworkLayerMetadata(
 
 function roleOf(layer: GeoLibreLayer): UtilityNetworkLayerRole | undefined {
   const role = layer.metadata.utilityNetworkRole;
-  return role === "junctions" || role === "lines" || role === "services"
+  return role === "junctions" ||
+    role === "lines" ||
+    role === "services" ||
+    role === "hydrants"
     ? role
     : undefined;
 }

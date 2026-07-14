@@ -9,6 +9,8 @@ import {
 import {
   generateNetwork,
   MIN_OFFSET_METERS,
+  DEFAULT_MAX_DEAD_END_KM,
+  DEFAULT_HYDRANT_SPACING_KM,
   type GenerateNetworkStage,
   type NetworkCoverage,
   type NetworkSide,
@@ -62,14 +64,17 @@ interface GeneratedResult {
   junctionsLayerId: string;
   linesLayerId: string;
   servicesLayerId: string | null;
+  hydrantsLayerId: string | null;
   junctionCount: number;
   lineCount: number;
   serviceCount: number;
+  hydrantCount: number;
   totalKm: number;
   truncated: boolean;
   servicesTruncated: boolean;
   servicesBlocked: boolean;
   servicesBlockedCount: number;
+  deadEndsExceedingMaxLength: number;
 }
 
 interface UtilityDesignDialogProps {
@@ -157,6 +162,10 @@ export function UtilityDesignDialog({
   const [offsetMeters, setOffsetMeters] = useState(DEFAULT_OFFSET_METERS);
   const [coverage, setCoverage] = useState<NetworkCoverage>("mainline");
   const [junctionsAtServiceTaps, setJunctionsAtServiceTaps] = useState(false);
+  const [excludePrivateAccess, setExcludePrivateAccess] = useState(false);
+  const [maxDeadEndKm, setMaxDeadEndKm] = useState(DEFAULT_MAX_DEAD_END_KM);
+  const [includeHydrants, setIncludeHydrants] = useState(false);
+  const [hydrantSpacingKm, setHydrantSpacingKm] = useState(DEFAULT_HYDRANT_SPACING_KM);
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
@@ -349,6 +358,10 @@ export function UtilityDesignDialog({
           mode: coverage,
           junctionsAtServiceTaps:
             coverage === "mainlineAndServices" ? junctionsAtServiceTaps : undefined,
+          excludePrivateAccess,
+          maxDeadEndKm,
+          includeHydrants: utilityType === "water" ? includeHydrants : false,
+          hydrantSpacingKm,
         },
         undefined,
         (event) => {
@@ -360,6 +373,7 @@ export function UtilityDesignDialog({
         removeLayer(result.junctionsLayerId);
         removeLayer(result.linesLayerId);
         if (result.servicesLayerId) removeLayer(result.servicesLayerId);
+        if (result.hydrantsLayerId) removeLayer(result.hydrantsLayerId);
       }
       const label = utilityType.charAt(0).toUpperCase() + utilityType.slice(1);
       const junctionsLayerId = addGeoJsonLayer(
@@ -386,6 +400,16 @@ export function UtilityDesignDialog({
               utilityNetworkLayerMetadata("services", utilityType),
             )
           : null;
+      const hydrantsLayerId =
+        generated.hydrants.features.length > 0
+          ? addGeoJsonLayer(
+              `${label} hydrants`,
+              generated.hydrants as unknown as FeatureCollection,
+              undefined,
+              null,
+              utilityNetworkLayerMetadata("hydrants", utilityType),
+            )
+          : null;
       const totalKm = generated.lines.features.reduce(
         (sum, feature) => sum + feature.properties.length_km,
         0,
@@ -394,14 +418,17 @@ export function UtilityDesignDialog({
         junctionsLayerId,
         linesLayerId,
         servicesLayerId,
+        hydrantsLayerId,
         junctionCount: generated.junctions.features.length,
         lineCount: generated.lines.features.length,
         serviceCount: generated.services.features.length,
+        hydrantCount: generated.hydrants.features.length,
         totalKm,
         truncated: generated.truncated,
         servicesTruncated: generated.servicesTruncated,
         servicesBlocked: generated.servicesBlocked,
         servicesBlockedCount: generated.servicesBlockedCount,
+        deadEndsExceedingMaxLength: generated.deadEndsExceedingMaxLength,
       });
       // Let the overlay's "Done!" checkmark state linger for a beat instead
       // of disappearing the instant the last progress event fires.
@@ -423,6 +450,10 @@ export function UtilityDesignDialog({
     side,
     coverage,
     junctionsAtServiceTaps,
+    excludePrivateAccess,
+    maxDeadEndKm,
+    includeHydrants,
+    hydrantSpacingKm,
     result,
     addGeoJsonLayer,
     removeLayer,
@@ -710,6 +741,70 @@ export function UtilityDesignDialog({
           <Separator />
 
           <div className="flex flex-col gap-2">
+            <Label className="font-medium">{t("utilityDesign.standardsTitle")}</Label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={excludePrivateAccess}
+                onChange={(e) => setExcludePrivateAccess(e.target.checked)}
+              />
+              {t("utilityDesign.excludePrivateAccess")}
+            </label>
+            <div className="flex items-center gap-1.5">
+              <Label
+                htmlFor="utility-max-dead-end-km"
+                className="text-xs font-normal text-muted-foreground"
+              >
+                {t("utilityDesign.maxDeadEndKmLabel")}
+              </Label>
+              <Input
+                id="utility-max-dead-end-km"
+                type="number"
+                min={0}
+                step={0.01}
+                value={maxDeadEndKm}
+                onChange={(e) => setMaxDeadEndKm(Number(e.target.value))}
+                className="h-7 w-20 text-xs"
+              />
+              <span className="text-xs text-muted-foreground">km</span>
+            </div>
+            {utilityType === "water" ? (
+              <>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeHydrants}
+                    onChange={(e) => setIncludeHydrants(e.target.checked)}
+                  />
+                  {t("utilityDesign.includeHydrants")}
+                </label>
+                {includeHydrants ? (
+                  <div className="flex items-center gap-1.5 pl-6">
+                    <Label
+                      htmlFor="utility-hydrant-spacing-km"
+                      className="text-xs font-normal text-muted-foreground"
+                    >
+                      {t("utilityDesign.hydrantSpacingLabel")}
+                    </Label>
+                    <Input
+                      id="utility-hydrant-spacing-km"
+                      type="number"
+                      min={0.01}
+                      step={0.01}
+                      value={hydrantSpacingKm}
+                      onChange={(e) => setHydrantSpacingKm(Number(e.target.value))}
+                      className="h-7 w-20 text-xs"
+                    />
+                    <span className="text-xs text-muted-foreground">km</span>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+
+          <Separator />
+
+          <div className="flex flex-col gap-2">
             <Button
               disabled={!canGenerate}
               onClick={handleGenerateClick}
@@ -748,6 +843,14 @@ export function UtilityDesignDialog({
                 {result.servicesBlocked
                   ? ` ${t("utilityDesign.resultServicesBlocked", {
                       count: result.servicesBlockedCount,
+                    })}`
+                  : ""}
+                {result.hydrantsLayerId
+                  ? ` ${t("utilityDesign.resultHydrants", { count: result.hydrantCount })}`
+                  : ""}
+                {result.deadEndsExceedingMaxLength > 0
+                  ? ` ${t("utilityDesign.resultDeadEndsExceeding", {
+                      count: result.deadEndsExceedingMaxLength,
                     })}`
                   : ""}
               </p>

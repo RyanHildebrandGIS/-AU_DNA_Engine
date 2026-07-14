@@ -9,6 +9,7 @@ import type { InvokableTool, JSONValue } from "@strands-agents/sdk";
 import maplibregl from "maplibre-gl";
 import { tool } from "@strands-agents/sdk";
 import { generateNetwork } from "@geolibre/utility-network";
+import { utilityNetworkLayerMetadata } from "../utility-network-layers";
 import type {
   Feature,
   FeatureCollection,
@@ -812,7 +813,7 @@ export function createAssistantTools(
   const generateUtilityNetwork = tool({
     name: "generate_utility_network",
     description:
-      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset to one or both sides of the road. Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones. In mainlineAndServices mode, a building whose only paths to the mainline would cross a different building's footprint is skipped rather than drawn through a neighboring property — check servicesBlockedCount in the response and mention it if nonzero. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API (retrying transient 429/502/503/504 errors automatically); no domain-specific rules yet (pipe sizing, slope, valve placement).",
+      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset at least 3m to one or both sides of the road (junctions are offset the same way — never placed on the road itself). Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones; a true dead end is labeled as a flushing point (Blow-off for water, Cleanout for sewer/stormwater) instead of the normal junction type, and flagged via exceedsMaxDeadEndLength if its unlooped run exceeds maxDeadEndKm. Lines carry an illustrative pipeSizeMm sized off the road hierarchy, and junctions carry crossesMajorRoad when a primary-or-above road is incident (a common casing trigger) — neither is a hydraulic/engineering design value. In mainlineAndServices mode, a building whose only paths to the mainline would cross a different building's footprint is skipped rather than drawn through a neighboring property — check servicesBlockedCount in the response and mention it if nonzero. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API (retrying transient 429/502/503/504 errors automatically); no full engineering design rules yet (hydraulic pipe sizing, slope, per-leg N-1 valving).",
     inputSchema: z.object({
       areaLayer: z
         .string()
@@ -852,6 +853,32 @@ export function createAssistantTools(
         .describe(
           "Also add a junction marker at every service's tap point on the mainline. Only applies when mode is \"mainlineAndServices\". Defaults to false.",
         ),
+      excludePrivateAccess: z
+        .boolean()
+        .optional()
+        .describe(
+          "Exclude fetched roads tagged access=private/no or motor_vehicle=no. Off by default since many legitimately driven rural roads carry these tags.",
+        ),
+      maxDeadEndKm: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Dead-end runs longer than this are flagged (not rejected) via exceedsMaxDeadEndLength. Defaults to 0.18 km (~180 m / 600 ft).",
+        ),
+      includeHydrants: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also generate a hydrants layer spaced along the finished mainline. Meaningful for any utility type but standard fire-hydrant spacing specifically applies to water. Defaults to false.",
+        ),
+      hydrantSpacingKm: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Spacing between hydrants in kilometers, when includeHydrants is set. Defaults to 0.15 km (~150 m / 500 ft, typical residential fire-code spacing) — commercial areas often want tighter spacing (~90 m).",
+        ),
     }),
     callback: async (input) => {
       const areaLayerRef = input.areaLayer?.trim() || "Sketches";
@@ -886,35 +913,61 @@ export function createAssistantTools(
         side: input.side,
         mode: input.mode,
         junctionsAtServiceTaps: input.junctionsAtServiceTaps,
+        excludePrivateAccess: input.excludePrivateAccess,
+        maxDeadEndKm: input.maxDeadEndKm,
+        includeHydrants: input.includeHydrants,
+        hydrantSpacingKm: input.hydrantSpacingKm,
       });
       const label =
         input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);
       const junctionsLayerId = store().addGeoJsonLayer(
         `${label} junctions`,
         result.junctions as unknown as FeatureCollection,
+        undefined,
+        null,
+        utilityNetworkLayerMetadata("junctions", input.utilityType),
       );
       const linesLayerId = store().addGeoJsonLayer(
         `${label} network lines`,
         result.lines as unknown as FeatureCollection,
+        undefined,
+        null,
+        utilityNetworkLayerMetadata("lines", input.utilityType),
       );
       const servicesLayerId =
         result.services.features.length > 0
           ? store().addGeoJsonLayer(
               `${label} services`,
               result.services as unknown as FeatureCollection,
+              undefined,
+              null,
+              utilityNetworkLayerMetadata("services", input.utilityType),
+            )
+          : undefined;
+      const hydrantsLayerId =
+        result.hydrants.features.length > 0
+          ? store().addGeoJsonLayer(
+              `${label} hydrants`,
+              result.hydrants as unknown as FeatureCollection,
+              undefined,
+              null,
+              utilityNetworkLayerMetadata("hydrants", input.utilityType),
             )
           : undefined;
       return json({
         junctionsLayerId,
         linesLayerId,
         servicesLayerId,
+        hydrantsLayerId,
         junctionCount: result.junctions.features.length,
         lineCount: result.lines.features.length,
         serviceCount: result.services.features.length,
+        hydrantCount: result.hydrants.features.length,
         truncated: result.truncated,
         servicesTruncated: result.servicesTruncated,
         servicesBlocked: result.servicesBlocked,
         servicesBlockedCount: result.servicesBlockedCount,
+        deadEndsExceedingMaxLength: result.deadEndsExceedingMaxLength,
       });
     },
   });

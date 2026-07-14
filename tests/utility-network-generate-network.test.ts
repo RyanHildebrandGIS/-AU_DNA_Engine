@@ -67,7 +67,12 @@ describe("generateNetworkFromRoads", () => {
     assert.equal(result.truncated, false);
     for (const junction of result.junctions.features) {
       assert.equal(junction.properties.utilityType, "water");
-      assert.equal(junction.properties.junctionType, "Valve");
+      // A true dead end (e.g. a grid corner) gets "Blow-off" instead of the
+      // normal "Valve" — see the dedicated dead-end-labeling test below.
+      assert.equal(
+        junction.properties.junctionType,
+        junction.properties.isDeadEnd ? "Blow-off" : "Valve",
+      );
     }
     for (const line of result.lines.features) {
       assert.equal(line.geometry.type, "LineString");
@@ -91,7 +96,34 @@ describe("generateNetworkFromRoads", () => {
       });
       assert.ok(result.junctions.features.length > 0);
       for (const junction of result.junctions.features) {
+        if (junction.properties.isDeadEnd) continue; // covered separately below
         assert.equal(junction.properties.junctionType, label);
+      }
+    }
+  });
+
+  it("labels a true dead end with a flushing-point name instead of the normal junction type", () => {
+    const expected: Record<string, string | undefined> = {
+      water: "Blow-off",
+      sewer: "Cleanout",
+      stormwater: "Cleanout",
+      electric: undefined, // no distinct standard dead-end structure — falls back to "Vault"
+      fiber: undefined, // falls back to "Handhole"
+    };
+    const fallback: Record<string, string> = {
+      electric: "Vault",
+      fiber: "Handhole",
+    };
+    for (const [utilityType, deadEndLabel] of Object.entries(expected)) {
+      const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType,
+        spacingKm: 0.3,
+      });
+      const deadEnds = result.junctions.features.filter((f) => f.properties.isDeadEnd);
+      assert.ok(deadEnds.length > 0, `expected at least one dead end for ${utilityType}`);
+      for (const junction of deadEnds) {
+        assert.equal(junction.properties.junctionType, deadEndLabel ?? fallback[utilityType]);
+        assert.ok(typeof junction.properties.deadEndRunKm === "number");
       }
     }
   });
@@ -464,6 +496,67 @@ describe("generateNetworkFromRoads", () => {
         0,
         `line ${line.properties.id} must not self-intersect: ${JSON.stringify(line.geometry.coordinates)}`,
       );
+    }
+  });
+
+  it("sizes pipes by road hierarchy, and flags junctions incident to a major road", () => {
+    // A residential spur (0,0)->(0,0.005) tees into a primary road running
+    // east-west through (0, 0.005) — a real branch, so it always gets a
+    // junction regardless of spacing.
+    const mixedRoads: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: { type: "LineString", coordinates: [[0, 0], [0, 0.005]] },
+        },
+        {
+          type: "Feature",
+          properties: { highway: "primary" },
+          geometry: {
+            type: "LineString",
+            coordinates: [[-0.005, 0.005], [0, 0.005], [0.005, 0.005]],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(AREA, SOURCE, mixedRoads, {
+      utilityType: "water",
+      spacingKm: 10,
+    });
+
+    // The residential spur's line uses the "local" tier (150mm default);
+    // the primary road's two lines use the "major" tier (300mm default).
+    const pipeSizes = result.lines.features.map((f) => f.properties.pipeSizeMm);
+    assert.ok(pipeSizes.includes(150), `expected a 150mm local-tier line, got ${pipeSizes}`);
+    assert.ok(pipeSizes.includes(300), `expected a 300mm major-tier line, got ${pipeSizes}`);
+
+    // The tee node (0, 0.005) is the only real branch (the primary road's
+    // own two ends are dead ends) — it has an incident primary-class road.
+    const teeJunction = result.junctions.features.find(
+      (f) => f.properties.isDeadEnd === false,
+    );
+    assert.equal(teeJunction?.properties.crossesMajorRoad, true);
+  });
+
+  it("does not generate hydrants unless includeHydrants is set, then spaces them along the mainline", () => {
+    const withoutHydrants = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.deepEqual(withoutHydrants.hydrants.features, []);
+
+    const withHydrants = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      includeHydrants: true,
+      hydrantSpacingKm: 0.002,
+    });
+    assert.ok(withHydrants.hydrants.features.length > 0);
+    for (const hydrant of withHydrants.hydrants.features) {
+      assert.equal(hydrant.properties.utilityType, "water");
+      assert.equal(hydrant.geometry.type, "Point");
     }
   });
 });
