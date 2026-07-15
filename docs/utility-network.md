@@ -208,6 +208,64 @@ front doors.
    type structurally, but standard fire-hydrant spacing specifically applies
    to water; off by default.
 
+## Road sources
+
+Step 1 above describes the default OSM/Overpass fetch. `generateNetwork`'s
+`roadSource` option (`"auto" | "osm" | "tigerweb" | "nrn"`, default `"auto"`)
+can instead resolve to a country-specific authoritative source, since OSM
+coverage is occasionally incomplete for older roads that were never
+comprehensively mapped:
+
+- **`"tigerweb"`** (`fetch-roads-tigerweb.ts`) queries the US Census Bureau's
+  [TIGERweb](https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation_LargeScale/MapServer)
+  `MapServer`. Rather than hardcoding a layer ID (uncertain across TIGERweb's
+  several published services), it discovers the road layer by listing
+  `?f=json` and name-matching `/road/i`, then queries it via a bbox envelope
+  (`esri-rest-client.ts`, shared with NRN below) and classifies each feature's
+  `MTFCC` code to an OSM-style `highway` value (`S1100`→primary, `S1200`→
+  secondary, `S1400`→residential, `S1500`→track, `S1630`→primary_link,
+  `S1640`/`S1730`/`S1780`→service). Unrecognized `MTFCC` codes are dropped
+  rather than guessed.
+- **`"nrn"`** (`fetch-roads-nrn.ts`) queries Statistics Canada's
+  [National Road Network](https://geo.statcan.gc.ca/geo_wa/rest/services/NRN-RRN/nrn_rrn/MapServer)
+  `MapServer` the same way, matching layer names against
+  `/road|highway|street|route/i` (NRN splits roads across several
+  per-province/per-type sublayers, unlike TIGERweb's single layer). Its
+  `ROADCLASS` field is classified by lowercase substring/keyword matching
+  (`"freeway"`→motorway, `"expressway"`/`"highway"`→trunk, `"arterial"`→
+  primary, `"collector"`→secondary, `"local"`→residential, `"alleyway"`/
+  `"lane"`/`"service"`→service, `"resource"`/`"recreation"`/`"winter"`→track),
+  not exact value matching — a missing or unrecognized `ROADCLASS` defaults
+  permissively to `residential` rather than being dropped, so an unexpected
+  value set doesn't silently under-cover an area. `"rapid transit"` and
+  `"ferry"` classes are excluded outright (not drivable).
+- **`"auto"`** picks `"tigerweb"` or `"nrn"` by checking the drawn area's
+  centroid against rough US (contiguous + Alaska + Hawaii) and Canada
+  bounding boxes (`road-source.ts`'s `detectCountryRoadSource`) — a coarse
+  heuristic, not real reverse geocoding, so it can guess wrong within ~tens of
+  km of the border. Anywhere else in the world, `"auto"` uses OSM directly.
+  The road-source picker in the Utility Design wizard always allows an
+  explicit override.
+- **Fallback is automatic and silent to the algorithm.** `fetchRoadsForArea`
+  wraps every `"tigerweb"`/`"nrn"` attempt (explicit or via `"auto"`) in a
+  try/catch; any failure — network error, non-OK response, no matching layer,
+  unexpected response shape — falls back to fetching OSM instead, via an
+  `onSourceFallback` callback surfaced through `generateNetwork`'s existing
+  `onProgress` event and shown to the user as a small "X was unavailable —
+  used OpenStreetMap instead" notice (`NetworkGenerationOverlay`,
+  `UtilityDesignDialog`'s result summary). Worst case, a wrong assumption
+  about either endpoint's schema behaves exactly like this feature not
+  existing — it never breaks generation outright.
+
+**Caveat:** TIGERweb's and NRN's exact layer IDs, field names, and
+`ROADCLASS` value set were researched from public documentation and could not
+be independently verified against the live endpoints during development —
+this sandboxed environment's network policy blocks outbound requests to both
+hosts. The layer-discovery-by-name and keyword-classification approaches
+above are deliberately defensive for exactly this reason (see "Fallback is
+automatic and silent" above). Treat `"tigerweb"`/`"nrn"` results as unverified
+until exercised against the real deployed app.
+
 ## Design standards
 
 The junction/spacing/offset/service-connection behavior above was checked
@@ -324,6 +382,13 @@ attributes go, which is the part this tool actually generates.
   generation fails with a clear error rather than falling back to a floating
   grid (an earlier version of this tool laid out a raster grid + straight-line
   minimum spanning tree with no road awareness at all — replaced entirely).
+- **TIGERweb/NRN endpoint behavior is unverified against the live
+  services** — see "Road sources" above. Layer discovery and field
+  classification were built defensively (auto-fallback to OSM on any
+  failure) specifically because this couldn't be confirmed during
+  development. **Country detection is a bounding-box centroid check, not
+  real reverse geocoding** — imprecise near the US/Canada border; always
+  overridable via an explicit `roadSource`.
 - **Service connections are ways-only** — buildings modeled as OSM
   `relation`s (multipolygon buildings, e.g. ones with courtyards) are not
   fetched, the same ways-only simplification already accepted for roads.

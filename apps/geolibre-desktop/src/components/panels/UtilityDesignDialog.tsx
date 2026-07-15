@@ -14,6 +14,8 @@ import {
   type GenerateNetworkStage,
   type NetworkCoverage,
   type NetworkSide,
+  type RoadSourceFallbackEvent,
+  type RoadSourceId,
 } from "@geolibre/utility-network";
 import {
   Button,
@@ -56,6 +58,7 @@ import {
 const DEFAULT_OFFSET_METERS = 3;
 const NETWORK_SIDES: NetworkSide[] = ["left", "right", "both"];
 const NETWORK_COVERAGES: NetworkCoverage[] = ["mainline", "mainlineAndServices"];
+const ROAD_SOURCES: RoadSourceId[] = ["auto", "osm", "tigerweb", "nrn"];
 
 const GEO_EDITOR_PLUGIN_ID = "maplibre-gl-geo-editor";
 const DEFAULT_SPACING_KM = 0.2;
@@ -166,12 +169,15 @@ export function UtilityDesignDialog({
   const [maxDeadEndKm, setMaxDeadEndKm] = useState(DEFAULT_MAX_DEAD_END_KM);
   const [includeHydrants, setIncludeHydrants] = useState(false);
   const [hydrantSpacingKm, setHydrantSpacingKm] = useState(DEFAULT_HYDRANT_SPACING_KM);
+  const [roadSource, setRoadSource] = useState<RoadSourceId>("auto");
   const [source, setSource] = useState<{ lon: number; lat: number } | null>(null);
   const [picking, setPicking] = useState(false);
   const [drawingArea, setDrawingArea] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progressStage, setProgressStage] = useState<GenerateNetworkStage | null>(null);
   const [progressRetry, setProgressRetry] = useState<NetworkGenerationRetryInfo | null>(null);
+  const [progressRoadSourceFallback, setProgressRoadSourceFallback] =
+    useState<RoadSourceFallbackEvent | null>(null);
   const [consentNoticeOpen, setConsentNoticeOpen] = useState(false);
   const [result, setResult] = useState<GeneratedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +346,7 @@ export function UtilityDesignDialog({
     setGenerating(true);
     setProgressStage("fetching");
     setProgressRetry(null);
+    setProgressRoadSourceFallback(null);
     switchToMapForAction();
     try {
       const sourceFeature: Feature<Point> = {
@@ -362,11 +369,15 @@ export function UtilityDesignDialog({
           maxDeadEndKm,
           includeHydrants: utilityType === "water" ? includeHydrants : false,
           hydrantSpacingKm,
+          roadSource,
         },
         undefined,
         (event) => {
           setProgressStage(event.stage);
           setProgressRetry(event.retry ?? null);
+          if (event.roadSourceFallback) {
+            setProgressRoadSourceFallback(event.roadSourceFallback);
+          }
         },
       );
       if (result) {
@@ -454,6 +465,7 @@ export function UtilityDesignDialog({
     maxDeadEndKm,
     includeHydrants,
     hydrantSpacingKm,
+    roadSource,
     result,
     addGeoJsonLayer,
     removeLayer,
@@ -525,7 +537,11 @@ export function UtilityDesignDialog({
             : t("utilityDesign.step3Picking")}
         </div>
       ) : null}
-      <NetworkGenerationOverlay stage={progressStage} retry={progressRetry} />
+      <NetworkGenerationOverlay
+        stage={progressStage}
+        retry={progressRetry}
+        roadSourceFallback={progressRoadSourceFallback}
+      />
       {mounted ? (
       <aside
         aria-label={t("utilityDesign.title")}
@@ -740,6 +756,28 @@ export function UtilityDesignDialog({
 
           <Separator />
 
+          <div className="flex flex-col gap-1.5">
+            <Label className="font-medium">{t("utilityDesign.roadSourceTitle")}</Label>
+            <div className="pl-0">
+              <Select
+                value={roadSource}
+                onChange={(e) => setRoadSource(e.target.value as RoadSourceId)}
+                className="max-w-[220px]"
+              >
+                {ROAD_SOURCES.map((rs) => (
+                  <option key={rs} value={rs}>
+                    {t(`utilityDesign.roadSource.${rs}`)}
+                  </option>
+                ))}
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("utilityDesign.roadSourceHelper")}
+              </p>
+            </div>
+          </div>
+
+          <Separator />
+
           <div className="flex flex-col gap-2">
             <Label className="font-medium">{t("utilityDesign.standardsTitle")}</Label>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -851,6 +889,13 @@ export function UtilityDesignDialog({
                 {result.deadEndsExceedingMaxLength > 0
                   ? ` ${t("utilityDesign.resultDeadEndsExceeding", {
                       count: result.deadEndsExceedingMaxLength,
+                    })}`
+                  : ""}
+                {progressRoadSourceFallback
+                  ? ` ${t("utilityDesign.roadSourceFallback", {
+                      source: t(
+                        `utilityDesign.roadSource.${progressRoadSourceFallback.attemptedSource}`,
+                      ),
                     })}`
                   : ""}
               </p>

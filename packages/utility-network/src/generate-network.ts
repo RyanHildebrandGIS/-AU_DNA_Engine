@@ -15,7 +15,6 @@ import { anchorOffsetLine } from "./anchor-offset-line";
 import { clipLineToArea } from "./clip-to-area";
 import { connectBuildingsToLines } from "./connect-services";
 import { fetchOsmBuildings } from "./fetch-buildings";
-import { fetchOsmRoads } from "./fetch-roads";
 import { perpendicularOffsetPoint } from "./offset-junction";
 import type { OverpassFetchOptions } from "./overpass-client";
 import { RoadClassLookup } from "./road-class-lookup";
@@ -25,6 +24,11 @@ import {
   shortestPathTree,
   snapToNearestNode,
 } from "./road-graph";
+import {
+  fetchRoadsForArea,
+  type RoadSourceFallbackEvent,
+  type RoadSourceId,
+} from "./road-source";
 
 export type NetworkSide = "left" | "right" | "both";
 export type NetworkCoverage = "mainline" | "mainlineAndServices";
@@ -48,6 +52,13 @@ export interface GenerateNetworkOptions {
   junctionsAtServiceTaps?: boolean;
   /** Exclude fetched roads tagged access=private/no or motor_vehicle=no. Only affects the async `generateNetwork` (it controls the road fetch); has no effect on `generateNetworkFromRoads`, which takes already-fetched roads. Defaults to false — see `FetchOsmRoadsOptions.excludePrivateAccess`. */
   excludePrivateAccess?: boolean;
+  /** Which road data source to fetch from. `"auto"` (default) picks a
+   * country-appropriate authoritative source (US Census TIGER/Line, Canada's
+   * National Road Network) based on the drawn area's location, falling back
+   * to OpenStreetMap on failure or anywhere else in the world. `"osm"`
+   * always uses OpenStreetMap. Only affects the async `generateNetwork` —
+   * see `road-source.ts`. */
+  roadSource?: RoadSourceId;
   /** Dead-end runs longer than this are flagged via `exceedsMaxDeadEndLength`/`deadEndRunKm` on the junction feature and counted in `deadEndsExceedingMaxLength` — not rejected or altered. Defaults to 0.18 km (~180 m / 600 ft), a commonly cited cap on unlooped main length. */
   maxDeadEndKm?: number;
   /** Also generate a `hydrants` layer spaced along the finished mainline. Meaningful for any utility type, but standard fire-hydrant spacing specifically applies to water. Defaults to false. */
@@ -67,6 +78,10 @@ export interface GenerateNetworkProgressEvent {
    * (429/502/503/504) so a loading UI can say "retrying" instead of stalling
    * silently while the retry backoff runs. */
   retry?: { attempt: number; maxAttempts: number; status: number };
+  /** Present only when a country-specific road source (`"tigerweb"`/`"nrn"`,
+   * explicit or via `"auto"`) failed and generation fell back to
+   * OpenStreetMap instead — see `road-source.ts`'s `fetchRoadsForArea`. */
+  roadSourceFallback?: RoadSourceFallbackEvent;
 }
 
 export type GenerateNetworkProgressCallback = (
@@ -297,9 +312,11 @@ export async function generateNetwork(
     },
   };
   const [roads, buildings] = await Promise.all([
-    fetchOsmRoads(area, {
+    fetchRoadsForArea(area, options.roadSource ?? "auto", {
       ...fetchOptionsWithProgress,
       excludePrivateAccess: options.excludePrivateAccess,
+      onSourceFallback: (event) =>
+        onProgress?.({ stage: "fetching", roadSourceFallback: event }),
     }),
     options.mode === "mainlineAndServices"
       ? fetchOsmBuildings(area, fetchOptionsWithProgress)

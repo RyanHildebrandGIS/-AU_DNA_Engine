@@ -1,4 +1,4 @@
-import type { GenerateNetworkStage } from "@geolibre/utility-network";
+import type { GenerateNetworkStage, RoadSourceFallbackEvent } from "@geolibre/utility-network";
 import type { ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -13,6 +13,10 @@ interface NetworkGenerationOverlayProps {
   stage: GenerateNetworkStage | null;
   /** Present while a transient Overpass error (429/502/503/504) is being retried. */
   retry: NetworkGenerationRetryInfo | null;
+  /** Present once a country-specific road source failed and generation fell
+   * back to OpenStreetMap — see `road-source.ts`. Sticky for the rest of
+   * generation (unlike `retry`, this isn't a per-attempt event). */
+  roadSourceFallback: RoadSourceFallbackEvent | null;
 }
 
 const STEPS: {
@@ -39,6 +43,7 @@ function stageIndex(stage: GenerateNetworkStage | null): number {
 export function NetworkGenerationOverlay({
   stage,
   retry,
+  roadSourceFallback,
 }: NetworkGenerationOverlayProps): ReactElement | null {
   const { t } = useTranslation();
   if (!stage) return null;
@@ -126,6 +131,13 @@ export function NetworkGenerationOverlay({
                 ? t("utilityDesign.progress.done")
                 : t(STEPS[Math.max(currentIndex, 0)]?.labelKey ?? STEPS[0].labelKey)}
           </p>
+          {roadSourceFallback ? (
+            <p className="text-xs text-muted-foreground" role="status">
+              {t("utilityDesign.roadSourceFallback", {
+                source: t(`utilityDesign.roadSource.${roadSourceFallback.attemptedSource}`),
+              })}
+            </p>
+          ) : null}
         </div>
 
         <ol className="flex w-full flex-col gap-2 text-left text-xs">

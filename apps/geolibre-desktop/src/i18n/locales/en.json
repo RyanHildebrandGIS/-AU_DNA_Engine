@@ -2086,6 +2086,15 @@
     "resultServicesBlocked": "{{count}} building(s) were not connected because every path to the mainline would cross a neighboring property.",
     "resultHydrants": "{{count}} hydrants generated.",
     "resultDeadEndsExceeding": "{{count}} dead end(s) exceed the flagged run-length threshold.",
+    "roadSourceTitle": "Road data source",
+    "roadSourceHelper": "Auto picks US Census TIGER/Line or Canada's National Road Network based on where you drew the project area, falling back to OpenStreetMap if that source is unavailable.",
+    "roadSource": {
+      "auto": "Auto (recommended)",
+      "osm": "OpenStreetMap",
+      "tigerweb": "US Census TIGER/Line",
+      "nrn": "Canada National Road Network"
+    },
+    "roadSourceFallback": "{{source}} was unavailable — used OpenStreetMap instead.",
     "roadNoticeTitle": "Fetching road data",
     "roadNoticeDesc": "Generating a network sends the coordinates of your drawn project area to the public OpenStreetMap Overpass API, so the pipe network can follow real roads. No account or API key is needed, but the request goes to a shared public server."
   },
