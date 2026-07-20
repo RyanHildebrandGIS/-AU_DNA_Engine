@@ -255,7 +255,13 @@ comprehensively mapped:
   used OpenStreetMap instead" notice (`NetworkGenerationOverlay`,
   `UtilityDesignDialog`'s result summary). Worst case, a wrong assumption
   about either endpoint's schema behaves exactly like this feature not
-  existing — it never breaks generation outright.
+  existing — it never breaks generation outright. **A technically-successful
+  response with zero usable road features also triggers the fallback**, not
+  just a thrown error — a source can return HTTP 200 with an empty or
+  entirely-unrecognized-classification result if a layer/field assumption is
+  wrong against the real endpoint, and without this check that would silently
+  skip OSM and surface as a misleading "no roads found in this project area"
+  even in a place OSM covers perfectly well.
 
 **Caveat:** TIGERweb's and NRN's exact layer IDs, field names, and
 `ROADCLASS` value set were researched from public documentation and could not

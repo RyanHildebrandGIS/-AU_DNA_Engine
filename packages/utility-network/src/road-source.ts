@@ -46,9 +46,10 @@ export interface FetchRoadsForAreaOptions extends FetchOsmRoadsOptions {
   /** Overrides the NRN MapServer endpoint (testing only). */
   nrnEndpoint?: string;
   /** Called when a country-specific source was attempted (explicitly or via
-   * `"auto"`) but failed and this fell back to OpenStreetMap instead —
-   * lets a caller show "TIGER/Line unavailable — using OpenStreetMap
-   * instead" rather than silently substituting a different data source. */
+   * `"auto"`) but failed — or returned zero usable road features — and this
+   * fell back to OpenStreetMap instead. Lets a caller show "TIGER/Line
+   * unavailable — using OpenStreetMap instead" rather than silently
+   * substituting a different data source. */
   onSourceFallback?: (event: RoadSourceFallbackEvent) => void;
 }
 
@@ -62,11 +63,16 @@ export interface FetchRoadsForAreaOptions extends FetchOsmRoadsOptions {
  * that motivated adding them, but neither's exact endpoint schema could be
  * independently verified live during development. So this **never lets a
  * country-specific source's failure break generation**: any error
- * (network, CORS, unexpected response shape) during a `"tigerweb"`/`"nrn"`
- * attempt — whether the caller asked for it explicitly or `"auto"` picked
- * it — is caught, reported via `onSourceFallback`, and generation proceeds
- * on OpenStreetMap instead, the same as if that source had never been
- * requested.
+ * (network, CORS, unexpected response shape) *or a technically-successful
+ * response with zero usable road features* (e.g. a layer/field assumption
+ * that turns out wrong against the real endpoint) during a `"tigerweb"`/
+ * `"nrn"` attempt — whether the caller asked for it explicitly or `"auto"`
+ * picked it — triggers a fallback, reported via `onSourceFallback`, and
+ * generation proceeds on OpenStreetMap instead, the same as if that source
+ * had never been requested. Without the empty-result check, a source that
+ * responds successfully but yields nothing (never throws) would silently
+ * skip OSM entirely and surface as a misleading "no roads in this area"
+ * even when OSM has full coverage.
  */
 export async function fetchRoadsForArea(
   area: Feature<Polygon | MultiPolygon>,
@@ -81,16 +87,22 @@ export async function fetchRoadsForArea(
   }
 
   try {
-    if (resolvedSource === "tigerweb") {
-      return await fetchTigerwebRoads(area, {
-        endpoint: options.tigerwebEndpoint,
-        signal: options.signal,
-      });
+    const result =
+      resolvedSource === "tigerweb"
+        ? await fetchTigerwebRoads(area, {
+            endpoint: options.tigerwebEndpoint,
+            signal: options.signal,
+          })
+        : await fetchNrnRoads(area, {
+            endpoint: options.nrnEndpoint,
+            signal: options.signal,
+          });
+    if (result.features.length === 0) {
+      throw new Error(
+        `${resolvedSource === "tigerweb" ? "TIGERweb" : "NRN"} returned no road features for this area`,
+      );
     }
-    return await fetchNrnRoads(area, {
-      endpoint: options.nrnEndpoint,
-      signal: options.signal,
-    });
+    return result;
   } catch (error) {
     options.onSourceFallback?.({
       attemptedSource: resolvedSource,

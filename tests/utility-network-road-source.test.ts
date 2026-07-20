@@ -58,7 +58,7 @@ describe("fetchRoadsForArea", () => {
     assert.ok(capturedUrls[0].includes("overpass"));
   });
 
-  it("auto-resolves a US area to tigerweb and does not call OSM on success", async (t) => {
+  it("auto-resolves a US area to tigerweb and does not call OSM when it returns real roads", async (t) => {
     const capturedUrls: string[] = [];
     t.mock.method(globalThis, "fetch", async (url: string) => {
       capturedUrls.push(url);
@@ -68,18 +68,61 @@ describe("fetchRoadsForArea", () => {
           { status: 200 },
         );
       }
-      return new Response(JSON.stringify({ type: "FeatureCollection", features: [] }), {
-        status: 200,
-      });
+      return new Response(
+        JSON.stringify({
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { MTFCC: "S1400" },
+              geometry: { type: "LineString", coordinates: [[-97.2, 39.5], [-97.19, 39.51]] },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
     });
 
     const fallbackEvents: unknown[] = [];
-    await fetchRoadsForArea(squareAround(-97.2, 39.5), "auto", {
+    const result = await fetchRoadsForArea(squareAround(-97.2, 39.5), "auto", {
       onSourceFallback: (event) => fallbackEvents.push(event),
     });
 
     assert.ok(capturedUrls.every((url) => !url.includes("overpass")));
     assert.equal(fallbackEvents.length, 0);
+    assert.equal(result.features.length, 1);
+  });
+
+  it("falls back to OSM when tigerweb succeeds but returns zero road features", async (t) => {
+    // Regression guard: a source that responds 200 with an empty/unusable
+    // result (e.g. a schema assumption that's wrong against the real
+    // endpoint) must not be treated as "this area genuinely has no roads" —
+    // it must still fall through to OSM, the same as a thrown error would.
+    const capturedUrls: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: string) => {
+      capturedUrls.push(url);
+      if (url.includes("?f=json")) {
+        return new Response(
+          JSON.stringify({ layers: [{ id: 1, name: "Roads" }] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("overpass")) {
+        return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ type: "FeatureCollection", features: [] }), {
+        status: 200,
+      });
+    });
+
+    const fallbackEvents: { attemptedSource: string }[] = [];
+    await fetchRoadsForArea(squareAround(-97.2, 39.5), "auto", {
+      onSourceFallback: (event) => fallbackEvents.push(event),
+    });
+
+    assert.equal(fallbackEvents.length, 1);
+    assert.equal(fallbackEvents[0].attemptedSource, "tigerweb");
+    assert.ok(capturedUrls.some((url) => url.includes("overpass")));
   });
 
   it("falls back to OSM and fires onSourceFallback when tigerweb fails", async (t) => {
