@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@turf/along": "^7.3.5",
-    "@turf/bbox": "^7.3.5",
     "@turf/bearing": "^7.3.5",
     "@turf/boolean-intersects": "^7.3.5",
     "@turf/boolean-point-in-polygon": "^7.3.5",

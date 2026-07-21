@@ -813,7 +813,7 @@ export function createAssistantTools(
   const generateUtilityNetwork = tool({
     name: "generate_utility_network",
     description:
-      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap by default, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset at least 3m to one or both sides of the road (junctions are offset the same way — never placed on the road itself). Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones; a true dead end is labeled as a flushing point (Blow-off for water, Cleanout for sewer/stormwater) instead of the normal junction type, and flagged via exceedsMaxDeadEndLength if its unlooped run exceeds maxDeadEndKm. Lines carry an illustrative pipeSizeMm sized off the road hierarchy, and junctions carry crossesMajorRoad when a primary-or-above road is incident (a common casing trigger) — neither is a hydraulic/engineering design value. In mainlineAndServices mode, a building whose only paths to the mainline would cross a different building's footprint is skipped rather than drawn through a neighboring property — check servicesBlockedCount in the response and mention it if nonzero. roadSource controls where road geometry comes from: \"auto\" (default) picks US Census TIGER/Line or Canada's National Road Network based on the drawn area's location and falls back to OpenStreetMap if that source fails; \"osm\" always uses OpenStreetMap. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API or the resolved country-specific source (retrying transient 429/502/503/504 errors automatically); no full engineering design rules yet (hydraulic pipe sizing, slope, per-leg N-1 valving).",
+      "Auto-generate a road-following utility network inside a drawn project-area polygon: junctions spaced along real road centerlines (fetched from OpenStreetMap, then clipped to the drawn polygon so the network never extends past it), connected to a source/point-of-connection by the shortest path over the road network, offset at least 3m to one or both sides of the road (junctions are offset the same way — never placed on the road itself). Junctions always appear at real road intersections and dead-ends in addition to the spacing-based ones; a true dead end is labeled as a flushing point (Blow-off for water, Cleanout for sewer/stormwater) instead of the normal junction type, and flagged via exceedsMaxDeadEndLength if its unlooped run exceeds maxDeadEndKm. Lines carry an illustrative pipeSizeMm sized off the road hierarchy, and junctions carry crossesMajorRoad when a primary-or-above road is incident (a common casing trigger) — neither is a hydraulic/engineering design value. In mainlineAndServices mode, a building whose only paths to the mainline would cross a different building's footprint is skipped rather than drawn through a neighboring property — check servicesBlockedCount in the response and mention it if nonzero. The project area must already exist as a polygon feature in a layer (e.g. the 'Sketches' layer left by the draw tool) — if none exists, tell the user to draw one first rather than guessing coordinates. Sends the area's coordinates to the public Overpass API (retrying transient 429/502/503/504 errors automatically); no full engineering design rules yet (hydraulic pipe sizing, slope, per-leg N-1 valving).",
     inputSchema: z.object({
       areaLayer: z
         .string()
@@ -879,12 +879,6 @@ export function createAssistantTools(
         .describe(
           "Spacing between hydrants in kilometers, when includeHydrants is set. Defaults to 0.15 km (~150 m / 500 ft, typical residential fire-code spacing) — commercial areas often want tighter spacing (~90 m).",
         ),
-      roadSource: z
-        .enum(["auto", "osm", "tigerweb", "nrn"])
-        .optional()
-        .describe(
-          "Which road data source to use. \"auto\" (default) picks a country-appropriate authoritative source (US Census TIGER/Line or Canada's National Road Network) based on the drawn area's location, falling back to OpenStreetMap on failure or anywhere else. \"osm\" always uses OpenStreetMap.",
-        ),
     }),
     callback: async (input) => {
       const areaLayerRef = input.areaLayer?.trim() || "Sketches";
@@ -923,7 +917,6 @@ export function createAssistantTools(
         maxDeadEndKm: input.maxDeadEndKm,
         includeHydrants: input.includeHydrants,
         hydrantSpacingKm: input.hydrantSpacingKm,
-        roadSource: input.roadSource,
       });
       const label =
         input.utilityType.charAt(0).toUpperCase() + input.utilityType.slice(1);

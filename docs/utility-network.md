@@ -143,26 +143,40 @@ front doors.
 7. **Services** (`mode: "mainlineAndServices"` only) — fetches OSM building
    footprints in the drawn area (`fetch-buildings.ts`, a second Overpass
    query, `way["building"](poly:"...")`) and connects each one to the
-   already-offset mainline (`connect-services.ts`):
+   already-offset mainline (`connect-services.ts`) with a service line that
+   meets the main at a true 90° angle — a real service lateral taps the main
+   perpendicular to it, never at an arbitrary angle:
    1. The building's centroid (`@turf/centroid`) is an approximate anchor.
-   2. Every mainline feature (both offset lines when `side: "both"`) is
-      ranked by `@turf/nearest-point-on-line` distance to that anchor, closest
-      first, keeping the nearest 5 as candidates.
-   3. Candidates are tried in that order. For each one,
-      `@turf/nearest-point-on-line` runs again against the building's own
-      footprint ring, using the candidate's main-side point as the
-      reference, giving the building-side connection point on the footprint
-      edge closest to the main (not the centroid itself). The resulting
-      2-point service line is checked with `@turf/boolean-intersects`
-      against every *other* building in the area — real service laterals
-      stay within the public right-of-way and the customer's own lot, never
-      cutting across a neighboring property, and without parcel/lot-line
-      data this is the closest enforceable proxy for that rule. The first
-      candidate whose line doesn't cross another building's footprint wins.
-   4. If none of the 5 nearest candidates qualify, the building is skipped
-      entirely rather than drawn through a neighbor's home, and counted in
-      `servicesBlockedCount` (`servicesBlocked` is true when that count is
-      nonzero).
+   2. Every segment of every mainline feature (both offset lines when
+      `side: "both"`) is checked for whether a line dropped perpendicular
+      from the anchor actually lands within that segment's span (not
+      extrapolated past either end) — using `@turf/bearing`/`@turf/distance`/
+      `@turf/destination` (spherical), the same approach
+      `offset-junction.ts` uses for perpendicular offsets, since real-world
+      degrees of longitude aren't the same size as degrees of latitude away
+      from the equator. Valid segments are ranked by that perpendicular
+      distance, closest first, keeping the nearest 8 as candidates. A
+      mainline corner that isn't directly abeam the building at all (every
+      segment's perpendicular foot falls outside its own span) simply isn't a
+      candidate — deliberately stricter than a plain nearest-point search,
+      which would otherwise snap to a distant vertex at an arbitrary angle.
+   3. Candidates are tried in that order. For each one, the building-side
+      endpoint is found by extending that same perpendicular line until it
+      crosses the building's own footprint ring (`@turf/line-intersect`),
+      keeping the *entire* service line collinear and perpendicular end to
+      end rather than kinking partway to reach the nearest footprint edge.
+      The resulting 2-point service line is checked with
+      `@turf/boolean-intersects` against every *other* building in the area —
+      real service laterals stay within the public right-of-way and the
+      customer's own lot, never cutting across a neighboring property, and
+      without parcel/lot-line data this is the closest enforceable proxy for
+      that rule. The first candidate whose line doesn't cross another
+      building's footprint wins.
+   4. If none of the 8 nearest candidates qualify — every valid perpendicular
+      tap would cross a neighbor, or none exists at all — the building is
+      skipped entirely rather than drawn through a neighbor's home or at an
+      ugly angle, and counted in `servicesBlockedCount` (`servicesBlocked` is
+      true when that count is nonzero).
 
    Available for every utility type. Buildings beyond `maxServices` (default
    500, same shape as `maxJunctions`) are dropped and reported via
@@ -208,70 +222,6 @@ front doors.
    type structurally, but standard fire-hydrant spacing specifically applies
    to water; off by default.
 
-## Road sources
-
-Step 1 above describes the default OSM/Overpass fetch. `generateNetwork`'s
-`roadSource` option (`"auto" | "osm" | "tigerweb" | "nrn"`, default `"auto"`)
-can instead resolve to a country-specific authoritative source, since OSM
-coverage is occasionally incomplete for older roads that were never
-comprehensively mapped:
-
-- **`"tigerweb"`** (`fetch-roads-tigerweb.ts`) queries the US Census Bureau's
-  [TIGERweb](https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation_LargeScale/MapServer)
-  `MapServer`. Rather than hardcoding a layer ID (uncertain across TIGERweb's
-  several published services), it discovers the road layer by listing
-  `?f=json` and name-matching `/road/i`, then queries it via a bbox envelope
-  (`esri-rest-client.ts`, shared with NRN below) and classifies each feature's
-  `MTFCC` code to an OSM-style `highway` value (`S1100`→primary, `S1200`→
-  secondary, `S1400`→residential, `S1500`→track, `S1630`→primary_link,
-  `S1640`/`S1730`/`S1780`→service). Unrecognized `MTFCC` codes are dropped
-  rather than guessed.
-- **`"nrn"`** (`fetch-roads-nrn.ts`) queries Statistics Canada's
-  [National Road Network](https://geo.statcan.gc.ca/geo_wa/rest/services/NRN-RRN/nrn_rrn/MapServer)
-  `MapServer` the same way, matching layer names against
-  `/road|highway|street|route/i` (NRN splits roads across several
-  per-province/per-type sublayers, unlike TIGERweb's single layer). Its
-  `ROADCLASS` field is classified by lowercase substring/keyword matching
-  (`"freeway"`→motorway, `"expressway"`/`"highway"`→trunk, `"arterial"`→
-  primary, `"collector"`→secondary, `"local"`→residential, `"alleyway"`/
-  `"lane"`/`"service"`→service, `"resource"`/`"recreation"`/`"winter"`→track),
-  not exact value matching — a missing or unrecognized `ROADCLASS` defaults
-  permissively to `residential` rather than being dropped, so an unexpected
-  value set doesn't silently under-cover an area. `"rapid transit"` and
-  `"ferry"` classes are excluded outright (not drivable).
-- **`"auto"`** picks `"tigerweb"` or `"nrn"` by checking the drawn area's
-  centroid against rough US (contiguous + Alaska + Hawaii) and Canada
-  bounding boxes (`road-source.ts`'s `detectCountryRoadSource`) — a coarse
-  heuristic, not real reverse geocoding, so it can guess wrong within ~tens of
-  km of the border. Anywhere else in the world, `"auto"` uses OSM directly.
-  The road-source picker in the Utility Design wizard always allows an
-  explicit override.
-- **Fallback is automatic and silent to the algorithm.** `fetchRoadsForArea`
-  wraps every `"tigerweb"`/`"nrn"` attempt (explicit or via `"auto"`) in a
-  try/catch; any failure — network error, non-OK response, no matching layer,
-  unexpected response shape — falls back to fetching OSM instead, via an
-  `onSourceFallback` callback surfaced through `generateNetwork`'s existing
-  `onProgress` event and shown to the user as a small "X was unavailable —
-  used OpenStreetMap instead" notice (`NetworkGenerationOverlay`,
-  `UtilityDesignDialog`'s result summary). Worst case, a wrong assumption
-  about either endpoint's schema behaves exactly like this feature not
-  existing — it never breaks generation outright. **A technically-successful
-  response with zero usable road features also triggers the fallback**, not
-  just a thrown error — a source can return HTTP 200 with an empty or
-  entirely-unrecognized-classification result if a layer/field assumption is
-  wrong against the real endpoint, and without this check that would silently
-  skip OSM and surface as a misleading "no roads found in this project area"
-  even in a place OSM covers perfectly well.
-
-**Caveat:** TIGERweb's and NRN's exact layer IDs, field names, and
-`ROADCLASS` value set were researched from public documentation and could not
-be independently verified against the live endpoints during development —
-this sandboxed environment's network policy blocks outbound requests to both
-hosts. The layer-discovery-by-name and keyword-classification approaches
-above are deliberately defensive for exactly this reason (see "Fallback is
-automatic and silent" above). Treat `"tigerweb"`/`"nrn"` results as unverified
-until exercised against the real deployed app.
-
 ## Design standards
 
 The junction/spacing/offset/service-connection behavior above was checked
@@ -292,10 +242,8 @@ matches this tool's defaults reasonably well:
   user-configurable input rather than a fixed constant — there's no single
   correct number, it's a real design decision that depends on the project.
 - **Service connections are conventionally perpendicular to the main** for a
-  straight run — which is exactly what `@turf/nearest-point-on-line` produces
-  by construction (the nearest point on a straight segment to an external
-  point is always the perpendicular foot), validating the nearest-point
-  approach in step 7 rather than it being an arbitrary simplification.
+  straight run — step 7's perpendicular-tap search enforces this directly
+  rather than approximating it.
 - **Minimum main-to-main separation is commonly around 10 ft (~3 m)** in these
   manuals, which is why this tool enforces `MIN_OFFSET_METERS` (3 m) as a
   hard floor — not just a default — for how far both the mainline **and its
@@ -388,18 +336,11 @@ attributes go, which is the part this tool actually generates.
   generation fails with a clear error rather than falling back to a floating
   grid (an earlier version of this tool laid out a raster grid + straight-line
   minimum spanning tree with no road awareness at all — replaced entirely).
-- **TIGERweb/NRN endpoint behavior is unverified against the live
-  services** — see "Road sources" above. Layer discovery and field
-  classification were built defensively (auto-fallback to OSM on any
-  failure) specifically because this couldn't be confirmed during
-  development. **Country detection is a bounding-box centroid check, not
-  real reverse geocoding** — imprecise near the US/Canada border; always
-  overridable via an explicit `roadSource`.
 - **Service connections are ways-only** — buildings modeled as OSM
   `relation`s (multipolygon buildings, e.g. ones with courtyards) are not
   fetched, the same ways-only simplification already accepted for roads.
-- **Service connections are a nearest-point approximation, not a true
-  mutual-nearest solve.** The main-side tap point is chosen using the
+- **Service connections use the building's centroid as an anchor, not a
+  true mutual-nearest solve.** The perpendicular-tap search is run from the
   building's centroid as a stand-in for "where on the building we'll connect
   from," which can pick a slightly different tap point than jointly
   optimizing both ends at once would. A reasonable first pass, not a
@@ -412,11 +353,16 @@ attributes go, which is the part this tool actually generates.
   buildings built right up against each other) is rejected even though nothing
   is actually being crossed. Real lot-line data would resolve both, but isn't
   available from OSM building footprints alone.
-- **Only the 5 nearest mainline candidates are tried per building** (not
-  every mainline segment) before giving up and skipping it — bounds the cost
-  of the crossing check (building × candidate × building) for large project
-  areas. A building whose nearest 5 candidates are all blocked but whose 6th
-  would have worked is skipped rather than found.
+- **Only the 8 nearest valid perpendicular candidates are tried per
+  building** before giving up and skipping it — bounds the cost of the
+  crossing check (building × candidate × building) for large project areas.
+  A building whose nearest 8 candidates are all blocked but whose 9th would
+  have worked is skipped rather than found.
+- **A mainline corner not directly abeam any building yields no candidate at
+  all**, by design (see step 7 above) — this trades some coverage (a building
+  near a corner or past a dead end may have no valid 90° tap and gets
+  skipped) for never drawing an ugly non-perpendicular service line. A
+  skipped, counted building is preferred over a misleading connection.
 - **`crossesMajorRoad` also flags a chain endpoint that merely *starts on* a
   major road, not only ones that geometrically cross one.** Checking only at
   chain endpoints (see step 8) avoids the far worse false-positive of a

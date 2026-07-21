@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { connectBuildingsToLines } from "@geolibre/utility-network";
+import bearing from "@turf/bearing";
 import { featureCollection, lineString, polygon } from "@turf/helpers";
-import type { LineString, Polygon } from "geojson";
+import type { LineString, Polygon, Position } from "geojson";
+
+/** Angle between two bearings, normalized to [0, 180]. */
+function bearingDiff(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
 
 // A straight mainline running north-south at x = 0.
 const LINES = featureCollection<LineString, { id: string }>([
@@ -147,5 +154,85 @@ describe("connectBuildingsToLines", () => {
       // Building A still connects fine; only B (blocked) is skipped.
       assert.equal(services.features.length, 1);
     });
+  });
+
+  it("meets the mainline at a true 90 degree angle, not an arbitrary nearest-point angle", () => {
+    // The building sits diagonally offset from the line, not directly
+    // abeam its midpoint — a plain nearest-point-on-line search would still
+    // find *a* closest point, but only a perpendicular-constrained search
+    // guarantees the connecting segment meets the line at exactly 90°.
+    const lines = featureCollection<LineString, { id: string }>([
+      lineString(
+        [
+          [0, 0],
+          [0, 0.02],
+        ],
+        { id: "line-1" },
+      ),
+    ]);
+    const building = polygon(
+      [
+        [
+          [0.003, 0.012],
+          [0.004, 0.012],
+          [0.004, 0.013],
+          [0.003, 0.013],
+          [0.003, 0.012],
+        ],
+      ],
+      { building: "yes" },
+    ) as unknown as { type: "Feature"; properties: object; geometry: Polygon };
+
+    const { services } = connectBuildingsToLines(featureCollection([building]), lines);
+    assert.equal(services.features.length, 1);
+    const [mainEnd, buildingEnd] = services.features[0].geometry.coordinates as [
+      Position,
+      Position,
+    ];
+
+    const serviceBearing = bearing(mainEnd, buildingEnd);
+    const lineBearing = bearing([0, 0], [0, 0.02]);
+    assert.ok(
+      Math.abs(bearingDiff(serviceBearing, lineBearing) - 90) < 0.01,
+      `expected the service to meet the main at 90°, got a ${bearingDiff(serviceBearing, lineBearing)}° angle`,
+    );
+  });
+
+  it("skips a building rather than snapping to a distant vertex at an ugly angle", () => {
+    // A short line segment that ends well before the building's latitude —
+    // no point on this segment is directly abeam the building, so there is
+    // no valid 90° tap. The old nearest-point-on-line approach would have
+    // clamped to the segment's end vertex and drawn a long diagonal line;
+    // the building must be skipped instead.
+    const lines = featureCollection<LineString, { id: string }>([
+      lineString(
+        [
+          [0, 0],
+          [0, 0.005],
+        ],
+        { id: "line-1" },
+      ),
+    ]);
+    const building = polygon(
+      [
+        [
+          [0.001, 0.02],
+          [0.002, 0.02],
+          [0.002, 0.021],
+          [0.001, 0.021],
+          [0.001, 0.02],
+        ],
+      ],
+      { building: "yes" },
+    ) as unknown as { type: "Feature"; properties: object; geometry: Polygon };
+
+    const { services, blockedByOtherBuilding, blockedCount } = connectBuildingsToLines(
+      featureCollection([building]),
+      lines,
+    );
+
+    assert.equal(services.features.length, 0);
+    assert.equal(blockedByOtherBuilding, true);
+    assert.equal(blockedCount, 1);
   });
 });

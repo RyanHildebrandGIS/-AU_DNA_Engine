@@ -32,18 +32,6 @@ export type {
 export { clipLineToArea } from "./clip-to-area";
 export { fetchOsmRoads } from "./fetch-roads";
 export type { FetchOsmRoadsOptions } from "./fetch-roads";
-export { fetchTigerwebRoads, DEFAULT_TIGERWEB_ENDPOINT } from "./fetch-roads-tigerweb";
-export type { FetchTigerwebRoadsOptions } from "./fetch-roads-tigerweb";
-export { fetchNrnRoads, DEFAULT_NRN_ENDPOINT } from "./fetch-roads-nrn";
-export type { FetchNrnRoadsOptions } from "./fetch-roads-nrn";
-export { fetchRoadsForArea, detectCountryRoadSource } from "./road-source";
-export type {
-  RoadSourceId,
-  RoadSourceFallbackEvent,
-  FetchRoadsForAreaOptions,
-} from "./road-source";
-export { listEsriLayers, queryEsriLayerByBbox } from "./esri-rest-client";
-export type { EsriLayerInfo, EsriFetchOptions } from "./esri-rest-client";
 export { fetchOsmBuildings } from "./fetch-buildings";
 export { connectBuildingsToLines } from "./connect-services";
 export type { ConnectServicesResult } from "./connect-services";
