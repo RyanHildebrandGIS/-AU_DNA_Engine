@@ -89,6 +89,7 @@ import {
   useReplaceStylePanelId,
   useRightPanelState,
 } from "../../hooks/useRightPanels";
+import { AssistantMascot } from "./AssistantMascot";
 import { BoundsRestrictionIndicator } from "./BoundsRestrictionIndicator";
 import { CollaborationStatusBadge } from "./CollaborationStatusBadge";
 import { CollaborateDialog } from "./CollaborateDialog";
@@ -1766,6 +1767,11 @@ export function DesktopShell({
           <SectionErrorBoundary label="Plugin floating panels">
             <FloatingPanels />
           </SectionErrorBoundary>
+          {layoutOptions.toolbarVisible && !assistantOpen ? (
+            <SilentErrorBoundary label="Assistant mascot">
+              <AssistantMascot />
+            </SilentErrorBoundary>
+          ) : null}
           {/* Rendered here (not in TopToolbar) so the dialog the status badge
               reopens stays mounted even in toolbar-hidden layouts (#754). */}
           {collaboration.enabled && (

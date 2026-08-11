@@ -86,6 +86,46 @@ body,
   }
 }
 
+/* Floating assistant mascot (AssistantMascot): a gentle idle float plus a
+   periodic blink, so it reads as "alive" rather than a static icon, without
+   being distracting enough to fight for attention over the map. */
+@keyframes geolibre-mascot-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes geolibre-mascot-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+.geolibre-mascot-bob {
+  animation: geolibre-mascot-bob 3.2s ease-in-out infinite;
+}
+.geolibre-mascot-eye {
+  animation: geolibre-mascot-blink 4.6s ease-in-out infinite;
+  transform-origin: center;
+}
+.geolibre-mascot-eye:nth-child(2) {
+  animation-delay: 0.05s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .geolibre-mascot-bob,
+  .geolibre-mascot-eye {
+    animation: none;
+    transform: none;
+  }
+}
+
 .geoagent-control .geoagent-control-icon svg {
   transform: translateX(1px);
 }

@@ -2123,6 +2123,7 @@
   },
   "assistant": {
     "title": "AI Assistant",
+    "mascotTooltip": "Ask the AI Assistant",
     "resize": "Resize assistant panel",
     "clear": "Clear conversation",
     "close": "Close assistant",
