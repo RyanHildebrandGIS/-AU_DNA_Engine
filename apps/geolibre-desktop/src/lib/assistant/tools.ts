@@ -18,6 +18,7 @@ import type {
   Polygon,
 } from "geojson";
 import { z } from "zod";
+import { replaceFeatureGeometry, removeFeatureById } from "../edit-feature";
 import { inferPropertyColumns } from "../pglite-sql";
 import { consoleDeps, runConsoleCode } from "../pyodide/pyodide-console";
 import {
@@ -972,6 +973,60 @@ export function createAssistantTools(
     },
   });
 
+  const editFeatureGeometry = tool({
+    name: "edit_feature_geometry",
+    description:
+      'Replace a single feature\'s geometry in place, by its "id" property — moves a point or reshapes a line without touching any other feature. Use this to refine an already-generated network (or any GeoJSON layer) conversationally, e.g. "move junction-3-right 5m north" or "reroute line-7 around that building", instead of regenerating the whole thing. Find the feature\'s id and current coordinates first via run_sql (e.g. SELECT id, ST_AsGeoJSON(geom) FROM <table> WHERE id = \'...\'). This does not re-validate design rules (minimum road offset, dead-end length, etc.) on the edited feature — those only apply to what generate_utility_network itself produces. The edit is a normal store change, so it is covered by undo.',
+    inputSchema: z.object({
+      layer: z.string().describe("Layer name or id."),
+      featureId: z.string().describe('The feature\'s "id" property.'),
+      geometry: z
+        .union([
+          z.object({
+            type: z.literal("Point"),
+            coordinates: z.tuple([z.number(), z.number()]),
+          }),
+          z.object({
+            type: z.literal("LineString"),
+            coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+          }),
+        ])
+        .describe(
+          "The feature's new geometry. Must match the feature's existing geometry type (a junction/hydrant is a Point; a line/service is a LineString).",
+        ),
+    }),
+    callback: (input) => {
+      const layer = resolveLayer(input.layer);
+      if (!layer) throw new Error(`No layer matching "${input.layer}".`);
+      if (!layer.geojson) throw new Error(`Layer "${layer.name}" has no feature data.`);
+      const updated = replaceFeatureGeometry(layer.geojson, input.featureId, input.geometry);
+      store().updateLayer(layer.id, { geojson: updated });
+      return json({ layerId: layer.id, featureId: input.featureId, ok: true });
+    },
+  });
+
+  const deleteFeature = tool({
+    name: "delete_feature",
+    description:
+      'Remove a single feature from a layer by its "id" property, without removing the whole layer — e.g. drop one junction, line segment, service connection, or hydrant from an already-generated network. Find the feature\'s id first via run_sql. The removal is a normal store change, so it is covered by undo.',
+    inputSchema: z.object({
+      layer: z.string().describe("Layer name or id."),
+      featureId: z.string().describe('The feature\'s "id" property.'),
+    }),
+    callback: (input) => {
+      const layer = resolveLayer(input.layer);
+      if (!layer) throw new Error(`No layer matching "${input.layer}".`);
+      if (!layer.geojson) throw new Error(`Layer "${layer.name}" has no feature data.`);
+      const updated = removeFeatureById(layer.geojson, input.featureId);
+      store().updateLayer(layer.id, { geojson: updated });
+      return json({
+        layerId: layer.id,
+        featureId: input.featureId,
+        remaining: updated.features.length,
+      });
+    },
+  });
+
   return [
     listLayers,
     runSql,
@@ -991,5 +1046,7 @@ export function createAssistantTools(
     runMaplibreJs,
     runPython,
     generateUtilityNetwork,
+    editFeatureGeometry,
+    deleteFeature,
   ] as InvokableTool<unknown, unknown>[];
 }
