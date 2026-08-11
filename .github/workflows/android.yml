@@ -1,0 +1,201 @@
+name: Android
+
+# Android builds run on published releases (matching release.yml), not on every
+# PR — the Rust cross-compile + Gradle build is slow and rarely needs per-PR
+# coverage. Use the manual "Run workflow" button (workflow_dispatch) to build a
+# signed APK on demand from any branch.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Least privilege at the workflow level; the build job below elevates to
+# contents: write only where it needs to attach release assets.
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep these in sync with docs/android.md and the local setup.
+  ANDROID_PLATFORM: "platforms;android-34"
+  ANDROID_BUILD_TOOLS: "build-tools;34.0.0"
+  # NDK r27 LTS — Tauri v2's supported line. Bump deliberately.
+  ANDROID_NDK_VERSION: "27.3.13750724"
+
+jobs:
+  build:
+    name: Build Android APK (release)
+    runs-on: ubuntu-22.04
+    # Elevated here (not workflow-level) so only this job can write release
+    # assets; workflow_dispatch runs never attach but the grant is harmless.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        # Third-party action pinned to a full commit SHA (v3 tag head) per the
+        # repo's policy for non-official actions; a tag could be re-pointed.
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Install Android NDK, platform, and build-tools
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "$ANDROID_PLATFORM" \
+            "$ANDROID_BUILD_TOOLS" \
+            "ndk;$ANDROID_NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust stable with Android targets
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: >-
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            i686-linux-android,
+            x86_64-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/geolibre-desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate Android project
+        # gen/android is not committed; regenerate it on the clean runner. The
+        # Tauri CLI is resolved through the geolibre-desktop workspace.
+        working-directory: apps/geolibre-desktop
+        run: npx tauri android init
+
+      - name: Apply GeoLibre launcher icons
+        # `tauri android init` writes default Tauri icons; overwrite the generated
+        # mipmaps with the GeoLibre launcher icons checked in under src-tauri/icons.
+        working-directory: apps/geolibre-desktop
+        run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
+
+      - name: Build release APKs (per ABI)
+        # Release (not --debug): the size-optimized + stripped Cargo profile keeps
+        # each .so small. --split-per-abi emits one ~40 MB APK per architecture
+        # instead of a single ~150 MB universal APK bundling all four ABIs.
+        # Release APKs are unsigned by default; the next step signs them.
+        working-directory: apps/geolibre-desktop
+        run: npx tauri android build --apk --split-per-abi
+        env:
+          VITE_GEE_OAUTH_CLIENT_ID: ${{ secrets.VITE_GEE_OAUTH_CLIENT_ID }}
+
+      - name: Sign APKs
+        id: sign
+        # With release-keystore secrets set, the APKs are signed for distribution.
+        # Without them, they're signed with a throwaway debug keystore so the CI
+        # artifacts are still installable for testing (do NOT publish those).
+        # Emits signed=release|debug so the release-upload step can refuse to
+        # attach debug-signed APKs to a public GitHub Release.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          store_pass_file="$RUNNER_TEMP/ks.pass"
+          key_pass_file="$RUNNER_TEMP/key.pass"
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            # Fail fast if the keystore secret is set but its companions are not,
+            # instead of a cryptic apksigner error later.
+            if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ]; then
+              echo "::error::ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS must be set when ANDROID_KEYSTORE_BASE64 is provided"
+              exit 1
+            fi
+            echo "Signing with the release keystore from secrets."
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            keystore="$RUNNER_TEMP/release.jks"
+            printf '%s' "$KEYSTORE_PASSWORD" > "$store_pass_file"
+            printf '%s' "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" > "$key_pass_file"
+            alias="$KEY_ALIAS"
+            sign_mode=release
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret set — signing with a throwaway debug keystore. Installable for testing only, NOT for distribution."
+            sign_mode=debug
+            keystore="$RUNNER_TEMP/debug.jks"
+            "$JAVA_HOME/bin/keytool" -genkeypair -v -keystore "$keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            printf '%s' android > "$store_pass_file"
+            printf '%s' android > "$key_pass_file"
+            alias=androiddebugkey
+          fi
+          out="$RUNNER_TEMP/apks"; mkdir -p "$out"
+          found=0
+          while IFS= read -r unsigned; do
+            found=1
+            # e.g. app-arm64-v8a-release-unsigned.apk -> geolibre-arm64-v8a.apk
+            abi="$(basename "$unsigned" | sed -E 's/^app-(.*)-release-unsigned\.apk$/\1/')"
+            aligned="$RUNNER_TEMP/aligned-$abi.apk"
+            signed="$out/geolibre-android-$abi.apk"
+            "$build_tools/zipalign" -p -f 4 "$unsigned" "$aligned"
+            # Pass passwords via files (pass:file:) so they never appear in the
+            # process argument list / CI logs.
+            "$build_tools/apksigner" sign --ks "$keystore" \
+              --ks-pass "file:$store_pass_file" --key-pass "file:$key_pass_file" \
+              --ks-key-alias "$alias" --out "$signed" "$aligned"
+            "$build_tools/apksigner" verify "$signed"
+            echo "signed $signed ($(du -h "$signed" | cut -f1))"
+          done < <(find apps/geolibre-desktop/src-tauri/gen/android \
+            -name '*release-unsigned.apk')
+          rm -f "$store_pass_file" "$key_pass_file"
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No release-unsigned APKs found"; exit 1
+          fi
+          # Emit the outcome only after every APK has signed and verified, so a
+          # downstream always() step can never read signed=release on a failure.
+          echo "signed=$sign_mode" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: geolibre-android-release-apks
+          path: ${{ runner.temp }}/apks/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach APKs to GitHub Release
+        # Only on a published release, and only when the APKs were signed with the
+        # real release keystore — never publish debug-signed builds as official
+        # downloads. workflow_dispatch runs still get the CI artifact above.
+        if: github.event_name == 'release' && steps.sign.outputs.signed == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP"/apks/*.apk --clobber
+
+      - name: Note skipped release upload
+        # Surface why a release run did not attach APKs (missing keystore secrets),
+        # so it does not look like a silent failure.
+        if: github.event_name == 'release' && steps.sign.outputs.signed != 'release'
+        run: |
+          echo "::warning::APKs were debug-signed (no ANDROID_KEYSTORE_BASE64 secret) and were NOT attached to the release. They are available as the CI artifact for testing only."

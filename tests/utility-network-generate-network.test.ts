@@ -1,0 +1,795 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  generateNetwork,
+  generateNetworkFromRoads,
+} from "@geolibre/utility-network";
+import distance from "@turf/distance";
+import kinks from "@turf/kinks";
+import type {
+  Feature,
+  FeatureCollection,
+  LineString,
+  Point,
+  Polygon,
+} from "geojson";
+
+const AREA: Feature<Polygon> = {
+  type: "Feature",
+  properties: {},
+  geometry: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-0.001, -0.001],
+        [-0.001, 0.011],
+        [0.011, 0.011],
+        [0.011, -0.001],
+        [-0.001, -0.001],
+      ],
+    ],
+  },
+};
+
+function sourcePoint(coords: [number, number]): Feature<Point> {
+  return { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: coords } };
+}
+
+// Same 3x3 street grid as utility-network-road-graph.test.ts.
+const XS = [0, 0.005, 0.01];
+const YS = [0, 0.005, 0.01];
+const GRID_ROADS: FeatureCollection<LineString> = {
+  type: "FeatureCollection",
+  features: [
+    ...YS.map((y) => ({
+      type: "Feature" as const,
+      properties: { highway: "residential" },
+      geometry: { type: "LineString" as const, coordinates: XS.map((x) => [x, y]) },
+    })),
+    ...XS.map((x) => ({
+      type: "Feature" as const,
+      properties: { highway: "residential" },
+      geometry: { type: "LineString" as const, coordinates: YS.map((y) => [x, y]) },
+    })),
+  ],
+};
+
+const SOURCE = sourcePoint([0, 0]);
+
+describe("generateNetworkFromRoads", () => {
+  it("generates junctions along roads connected to the source", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+
+    assert.ok(result.junctions.features.length > 0, "expected at least one junction");
+    assert.equal(result.truncated, false);
+    for (const junction of result.junctions.features) {
+      assert.equal(junction.properties.utilityType, "water");
+      // A true dead end (e.g. a grid corner) gets "Blow-off" instead of the
+      // normal "Valve" — see the dedicated dead-end-labeling test below.
+      assert.equal(
+        junction.properties.junctionType,
+        junction.properties.isDeadEnd ? "Blow-off" : "Valve",
+      );
+    }
+    for (const line of result.lines.features) {
+      assert.equal(line.geometry.type, "LineString");
+      assert.ok(line.properties.length_km >= 0);
+      assert.equal(line.properties.side, "right");
+    }
+  });
+
+  it("gives every utility type its standard junction name", () => {
+    const expected: Record<string, string> = {
+      water: "Valve",
+      sewer: "Manhole",
+      stormwater: "Catch Basin",
+      electric: "Vault",
+      fiber: "Handhole",
+    };
+    for (const [utilityType, label] of Object.entries(expected)) {
+      const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType,
+        spacingKm: 0.3,
+      });
+      assert.ok(result.junctions.features.length > 0);
+      for (const junction of result.junctions.features) {
+        if (junction.properties.isDeadEnd) continue; // covered separately below
+        assert.equal(junction.properties.junctionType, label);
+      }
+    }
+  });
+
+  it("labels a true dead end with a flushing-point name instead of the normal junction type", () => {
+    const expected: Record<string, string | undefined> = {
+      water: "Blow-off",
+      sewer: "Cleanout",
+      stormwater: "Cleanout",
+      electric: undefined, // no distinct standard dead-end structure — falls back to "Vault"
+      fiber: undefined, // falls back to "Handhole"
+    };
+    const fallback: Record<string, string> = {
+      electric: "Vault",
+      fiber: "Handhole",
+    };
+    for (const [utilityType, deadEndLabel] of Object.entries(expected)) {
+      const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType,
+        spacingKm: 0.3,
+      });
+      const deadEnds = result.junctions.features.filter((f) => f.properties.isDeadEnd);
+      assert.ok(deadEnds.length > 0, `expected at least one dead end for ${utilityType}`);
+      for (const junction of deadEnds) {
+        assert.equal(junction.properties.junctionType, deadEndLabel ?? fallback[utilityType]);
+        assert.ok(typeof junction.properties.deadEndRunKm === "number");
+      }
+    }
+  });
+
+  it('falls back to a generic "Junction" label for an unrecognized utility type', () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "gas",
+      spacingKm: 0.3,
+    });
+    assert.ok(result.junctions.features.length > 0);
+    for (const junction of result.junctions.features) {
+      assert.equal(junction.properties.junctionType, "Junction");
+    }
+  });
+
+  it("defaults to a 3m offset to the right, shifting lines off the centerline", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    for (const line of result.lines.features) {
+      // The line's endpoints are deliberately anchored back to the true
+      // (on-grid) junction location — see the connectivity fix below — so
+      // only an INTERIOR coordinate proves the line was actually offset,
+      // not left running exactly on the centerline for its whole length.
+      assert.ok(
+        line.geometry.coordinates.length > 2,
+        "expected at least one interior (offset) coordinate between the anchored endpoints",
+      );
+      const [lon, lat] = line.geometry.coordinates[1];
+      const onGridLattice =
+        Math.abs(lon % 0.005) < 1e-9 && Math.abs(lat % 0.005) < 1e-9;
+      assert.ok(!onGridLattice, "the interior of the line should not sit exactly on the raw grid");
+    }
+  });
+
+  it("anchors every line's endpoints to an offset junction/decision-point location, exactly matching where present", () => {
+    // Real connectivity requirement: a line must actually touch the
+    // junction markers at both ends, not just run parallel nearby — and two
+    // chains sharing a node must meet at the exact same coordinate. Junction
+    // markers themselves must never sit on the true (unoffset) road vertex —
+    // see the "never places a junction on the road" tests below.
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const junctionCoordKeys = new Set(
+      result.junctions.features.map((f) => f.geometry.coordinates.join(",")),
+    );
+    // The source/root node also anchors lines but has no junction marker of
+    // its own — every line touching it must still share the exact same
+    // (offset, not the true [0, 0]) anchor point as every other such line.
+    const unmatchedEndpointKeys = new Set<string>();
+    for (const line of result.lines.features) {
+      const first = line.geometry.coordinates[0];
+      const last = line.geometry.coordinates[line.geometry.coordinates.length - 1];
+      for (const endpoint of [first, last]) {
+        const key = endpoint.join(",");
+        if (!junctionCoordKeys.has(key)) unmatchedEndpointKeys.add(key);
+      }
+    }
+    assert.equal(
+      unmatchedEndpointKeys.size,
+      1,
+      "every line endpoint must exactly match either a junction or the single shared root anchor point",
+    );
+    assert.ok(
+      !unmatchedEndpointKeys.has("0,0"),
+      "the root anchor must be offset, not the true unoffset source point",
+    );
+  });
+
+  it("never places a junction (or a line's decision-point anchor) on the road — always at least ~3m away", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const roadVertices = GRID_ROADS.features.flatMap((f) => f.geometry.coordinates);
+    const nearestRoadVertexDistanceMeters = (point: number[]): number =>
+      Math.min(
+        ...roadVertices.map((v) => distance(point, v, { units: "kilometers" }) * 1000),
+      );
+
+    for (const junction of result.junctions.features) {
+      const d = nearestRoadVertexDistanceMeters(junction.geometry.coordinates);
+      assert.ok(
+        d >= 2.9,
+        `junction at ${junction.geometry.coordinates} must be at least ~3m from the nearest road vertex, was ${d.toFixed(2)}m`,
+      );
+    }
+    // Every line endpoint (including the unmarked root anchor) must also
+    // clear the same distance — the whole main stays off the road, not
+    // just the marked junction dots.
+    for (const line of result.lines.features) {
+      const coords = line.geometry.coordinates;
+      for (const endpoint of [coords[0], coords[coords.length - 1]]) {
+        const d = nearestRoadVertexDistanceMeters(endpoint);
+        assert.ok(
+          d >= 2.9,
+          `line endpoint at ${endpoint} must be at least ~3m from the nearest road vertex, was ${d.toFixed(2)}m`,
+        );
+      }
+    }
+  });
+
+  it("clamps a requested offset below 3m up to the 3m floor for both junctions and lines", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      offsetMeters: 0.5,
+    });
+    const roadVertices = GRID_ROADS.features.flatMap((f) => f.geometry.coordinates);
+    for (const junction of result.junctions.features) {
+      const d = Math.min(
+        ...roadVertices.map(
+          (v) => distance(junction.geometry.coordinates, v, { units: "kilometers" }) * 1000,
+        ),
+      );
+      assert.ok(
+        d >= 2.9,
+        `junction must still be clamped to at least ~3m even when offsetMeters: 0.5 was requested, was ${d.toFixed(2)}m`,
+      );
+    }
+  });
+
+  it('"both" produces two lines (one per side) for every edge "left"/"right" produces one for', () => {
+    const right = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "right",
+    });
+    const both = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "both",
+    });
+    assert.equal(both.lines.features.length, right.lines.features.length * 2);
+    const sides = new Set(both.lines.features.map((f) => f.properties.side));
+    assert.deepEqual(sides, new Set(["left", "right"]));
+  });
+
+  it('"both" produces two distinct junctions per node, one on each side of the road', () => {
+    const single = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "right",
+    });
+    const both = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      side: "both",
+    });
+    assert.equal(both.junctions.features.length, single.junctions.features.length * 2);
+    const sides = both.junctions.features.map((f) => f.properties.side);
+    assert.ok(sides.every((s) => s === "left" || s === "right"));
+    assert.equal(sides.filter((s) => s === "left").length, single.junctions.features.length);
+    assert.equal(sides.filter((s) => s === "right").length, single.junctions.features.length);
+
+    // The left/right pair for the same node must be on opposite sides of
+    // the road, not duplicates at the identical point.
+    const coordKeys = both.junctions.features.map((f) => f.geometry.coordinates.join(","));
+    assert.equal(new Set(coordKeys).size, coordKeys.length, "no two junctions should coincide");
+  });
+
+  it("keeps a multi-vertex road as one continuous line instead of one per graph edge", () => {
+    // A single straight road with 5 vertices (4 graph edges) and no
+    // intersections along the way — everything between the source (at the
+    // road's far end) and the one junction (at the road's start, the only
+    // spacing candidate given a spacing larger than the road) is a plain
+    // pass-through chain, so it should come back as ONE line spanning all 5
+    // vertices, not fragmented into 4 separate 2-point segments (the bug:
+    // offsetting each tiny edge independently left visible gaps at every
+    // original road vertex, not just at real junctions).
+    const straightRoad: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0],
+              [0.001, 0],
+              [0.002, 0],
+              [0.003, 0],
+              [0.004, 0],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      sourcePoint([0.004, 0]),
+      straightRoad,
+      {
+        utilityType: "water",
+        // Larger than the road's ~0.44km length: placeJunctionsAlongRoads
+        // only samples distance 0 along the road (its start vertex), giving
+        // exactly one junction candidate distinct from the source.
+        spacingKm: 1,
+      },
+    );
+    assert.equal(result.junctions.features.length, 1);
+    assert.equal(result.lines.features.length, 1);
+    // 5 offset vertices plus the 2 anchored (true, unoffset) endpoints.
+    assert.equal(result.lines.features[0].geometry.coordinates.length, 7);
+  });
+
+  it("truncates and reports it when junctions exceed maxJunctions", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "electric",
+      spacingKm: 0.1,
+      maxJunctions: 2,
+    });
+    assert.equal(result.junctions.features.length, 2);
+    assert.equal(result.truncated, true);
+  });
+
+  it("rejects a non-positive spacing", () => {
+    assert.throws(() =>
+      generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType: "water",
+        spacingKm: 0,
+      }),
+    );
+    assert.throws(() =>
+      generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+        utilityType: "water",
+        spacingKm: Number.NaN,
+      }),
+    );
+  });
+
+  it("throws a clear error when no roads are given", () => {
+    const empty: FeatureCollection<LineString> = { type: "FeatureCollection", features: [] };
+    assert.throws(
+      () =>
+        generateNetworkFromRoads(AREA, SOURCE, empty, {
+          utilityType: "water",
+          spacingKm: 0.3,
+        }),
+      /No roads found/,
+    );
+  });
+
+  it("places a junction at a real intersection even when spacing skips over it", () => {
+    // A plus-shaped intersection at (0.005, 0.005), shared by a horizontal
+    // and a vertical road. spacingKm is set far larger than either road's
+    // length, so placeJunctionsAlongRoads only ever samples each road's very
+    // first vertex — the real intersection is never a spacing candidate,
+    // yet it's a genuine 4-way branch and must still get a junction marker
+    // (previously: the mainline visibly split there with no junction dot).
+    const crossRoads: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0.005],
+              [0.005, 0.005],
+              [0.01, 0.005],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0.005, 0],
+              [0.005, 0.005],
+              [0.005, 0.01],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      sourcePoint([0, 0.005]),
+      crossRoads,
+      { utilityType: "water", spacingKm: 10 },
+    );
+    // The marker sits near the true intersection, offset off the road
+    // rather than exactly on it (see the "never on the road" tests above) —
+    // so this checks proximity within a small margin around the default 3m
+    // offset, not an exact coordinate match.
+    const distanceMetersFromIntersection = (coords: number[]): number =>
+      distance(coords, [0.005, 0.005], { units: "kilometers" }) * 1000;
+    const hasJunctionNearIntersection = result.junctions.features.some((f) => {
+      const d = distanceMetersFromIntersection(f.geometry.coordinates);
+      return d >= 2.9 && d <= 3.5;
+    });
+    assert.ok(
+      hasJunctionNearIntersection,
+      "expected a junction marker offset ~3m from the real 4-way intersection",
+    );
+  });
+
+  it("clips generated lines to the drawn area, even when roads extend past it", () => {
+    const smallArea: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [-0.001, -0.001],
+            [-0.001, 0.006],
+            [0.006, 0.006],
+            [0.006, -0.001],
+            [-0.001, -0.001],
+          ],
+        ],
+      },
+    };
+    const result = generateNetworkFromRoads(smallArea, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.ok(result.lines.features.length > 0);
+    for (const line of result.lines.features) {
+      for (const [lon, lat] of line.geometry.coordinates) {
+        assert.ok(lon <= 0.006 + 1e-4, `lon ${lon} should not exceed the drawn area`);
+        assert.ok(lat <= 0.006 + 1e-4, `lat ${lat} should not exceed the drawn area`);
+      }
+    }
+  });
+
+  it("never produces a self-intersecting line, even along a road with a sharp hairpin bend", () => {
+    // A road with a near-hairpin bend near its far end (like the curving
+    // "Elm Bay" street that triggered this bug in practice) — offsetting a
+    // sharp bend can overshoot, and anchoring naively onto that overshoot
+    // can self-intersect right next to the junction.
+    const hairpinRoad: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0],
+              [0.003, 0],
+              [0.006, 0.0003],
+              [0.0063, 0.0003],
+              [0.00605, 0.0005],
+            ],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      hairpinRoad,
+      { utilityType: "water", spacingKm: 0.01, offsetMeters: 8 },
+    );
+    assert.ok(result.lines.features.length > 0);
+    for (const line of result.lines.features) {
+      assert.equal(
+        kinks(line).features.length,
+        0,
+        `line ${line.properties.id} must not self-intersect: ${JSON.stringify(line.geometry.coordinates)}`,
+      );
+    }
+  });
+
+  it("sizes pipes by road hierarchy, and flags junctions incident to a major road", () => {
+    // A residential spur (0,0)->(0,0.005) tees into a primary road running
+    // east-west through (0, 0.005) — a real branch, so it always gets a
+    // junction regardless of spacing.
+    const mixedRoads: FeatureCollection<LineString> = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { highway: "residential" },
+          geometry: { type: "LineString", coordinates: [[0, 0], [0, 0.005]] },
+        },
+        {
+          type: "Feature",
+          properties: { highway: "primary" },
+          geometry: {
+            type: "LineString",
+            coordinates: [[-0.005, 0.005], [0, 0.005], [0.005, 0.005]],
+          },
+        },
+      ],
+    };
+    const result = generateNetworkFromRoads(AREA, SOURCE, mixedRoads, {
+      utilityType: "water",
+      spacingKm: 10,
+    });
+
+    // The residential spur's line uses the "local" tier (150mm default);
+    // the primary road's two lines use the "major" tier (300mm default).
+    const pipeSizes = result.lines.features.map((f) => f.properties.pipeSizeMm);
+    assert.ok(pipeSizes.includes(150), `expected a 150mm local-tier line, got ${pipeSizes}`);
+    assert.ok(pipeSizes.includes(300), `expected a 300mm major-tier line, got ${pipeSizes}`);
+
+    // The tee node (0, 0.005) is the only real branch (the primary road's
+    // own two ends are dead ends) — it has an incident primary-class road.
+    const teeJunction = result.junctions.features.find(
+      (f) => f.properties.isDeadEnd === false,
+    );
+    assert.equal(teeJunction?.properties.crossesMajorRoad, true);
+  });
+
+  it("does not generate hydrants unless includeHydrants is set, then spaces them along the mainline", () => {
+    const withoutHydrants = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.deepEqual(withoutHydrants.hydrants.features, []);
+
+    const withHydrants = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+      includeHydrants: true,
+      hydrantSpacingKm: 0.002,
+    });
+    assert.ok(withHydrants.hydrants.features.length > 0);
+    for (const hydrant of withHydrants.hydrants.features) {
+      assert.equal(hydrant.properties.utilityType, "water");
+      assert.equal(hydrant.geometry.type, "Point");
+    }
+  });
+});
+
+describe("generateNetworkFromRoads services mode", () => {
+  it("defaults to no service connections", () => {
+    const result = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    assert.equal(result.services.features.length, 0);
+    assert.equal(result.servicesTruncated, false);
+    assert.equal(result.servicesBlocked, false);
+    assert.equal(result.servicesBlockedCount, 0);
+  });
+
+  it("connects buildings to the mainline when mode is mainlineAndServices", () => {
+    const mainlineOnly = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const [lon, lat] = mainlineOnly.lines.features[0].geometry.coordinates[0];
+    const building: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [lon + 0.0001, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0001],
+          ],
+        ],
+      },
+    };
+    const buildings: FeatureCollection<Polygon> = {
+      type: "FeatureCollection",
+      features: [building],
+    };
+
+    const result = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      { utilityType: "water", spacingKm: 0.3, mode: "mainlineAndServices" },
+      buildings,
+    );
+
+    assert.equal(result.services.features.length, 1);
+    assert.equal(result.servicesTruncated, false);
+  });
+
+  it("adds a junction marker at each service tap point when junctionsAtServiceTaps is set", () => {
+    const mainlineOnly = generateNetworkFromRoads(AREA, SOURCE, GRID_ROADS, {
+      utilityType: "water",
+      spacingKm: 0.3,
+    });
+    const [lon, lat] = mainlineOnly.lines.features[0].geometry.coordinates[0];
+    const building: Feature<Polygon> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [lon + 0.0001, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0001],
+            [lon + 0.0002, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0002],
+            [lon + 0.0001, lat + 0.0001],
+          ],
+        ],
+      },
+    };
+    const buildings: FeatureCollection<Polygon> = {
+      type: "FeatureCollection",
+      features: [building],
+    };
+    const withoutOption = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      { utilityType: "water", spacingKm: 0.3, mode: "mainlineAndServices" },
+      buildings,
+    );
+    const withOption = generateNetworkFromRoads(
+      AREA,
+      SOURCE,
+      GRID_ROADS,
+      {
+        utilityType: "water",
+        spacingKm: 0.3,
+        mode: "mainlineAndServices",
+        junctionsAtServiceTaps: true,
+      },
+      buildings,
+    );
+    assert.equal(
+      withOption.junctions.features.length,
+      withoutOption.junctions.features.length + 1,
+    );
+    const serviceJunction = withOption.junctions.features.find((f) =>
+      f.properties.id.startsWith("service-junction-"),
+    );
+    assert.ok(serviceJunction, "expected a service-junction feature");
+    assert.equal(serviceJunction!.properties.junctionType, "Valve");
+  });
+});
+
+describe("generateNetwork (async wrapper)", () => {
+  it("fetches roads then delegates to generateNetworkFromRoads", async (t) => {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+      new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await generateNetwork(AREA, SOURCE, {
+      utilityType: "sewer",
+      spacingKm: 0.3,
+    });
+
+    assert.equal(fetchMock.mock.calls.length, 1);
+    assert.ok(result.junctions.features.length > 0);
+  });
+
+  it("also fetches buildings when mode is mainlineAndServices", async (t) => {
+    const fetchMock = t.mock.method(
+      globalThis,
+      "fetch",
+      async (_url: string, init?: RequestInit) => {
+        const body = decodeURIComponent(
+          (init?.body as string).replace(/^data=/, ""),
+        );
+        if (body.includes('["building"]')) {
+          return new Response(JSON.stringify({ elements: [] }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            elements: GRID_ROADS.features.map((f, i) => ({
+              type: "way",
+              id: i,
+              tags: { highway: "residential" },
+              geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+            })),
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const result = await generateNetwork(AREA, SOURCE, {
+      utilityType: "sewer",
+      spacingKm: 0.3,
+      mode: "mainlineAndServices",
+    });
+
+    assert.equal(fetchMock.mock.calls.length, 2);
+    assert.equal(result.services.features.length, 0);
+  });
+
+  it("reports fetching -> building -> done via onProgress", async (t) => {
+    t.mock.method(globalThis, "fetch", async () =>
+      new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const events: { stage: string; retry?: unknown }[] = [];
+    await generateNetwork(
+      AREA,
+      SOURCE,
+      { utilityType: "water", spacingKm: 0.3 },
+      undefined,
+      (event) => events.push(event),
+    );
+
+    assert.deepEqual(
+      events.map((e) => e.stage),
+      ["fetching", "building", "done"],
+    );
+  });
+
+  it("reports a retry event through onProgress when Overpass returns a transient error", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      if (calls < 2) {
+        return new Response("bad gateway", { status: 502, statusText: "Bad Gateway" });
+      }
+      return new Response(
+        JSON.stringify({
+          elements: GRID_ROADS.features.map((f, i) => ({
+            type: "way",
+            id: i,
+            tags: { highway: "residential" },
+            geometry: f.geometry.coordinates.map(([lon, lat]) => ({ lon, lat })),
+          })),
+        }),
+        { status: 200 },
+      );
+    });
+
+    const events: { stage: string; retry?: { attempt: number; maxAttempts: number; status: number } }[] = [];
+    await generateNetwork(
+      AREA,
+      SOURCE,
+      { utilityType: "water", spacingKm: 0.3 },
+      { retryDelaysMs: [0, 0] },
+      (event) => events.push(event),
+    );
+
+    const retryEvent = events.find((e) => e.retry);
+    assert.ok(retryEvent, "expected a retry event");
+    assert.deepEqual(retryEvent!.retry, { attempt: 1, maxAttempts: 3, status: 502 });
+  });
+});

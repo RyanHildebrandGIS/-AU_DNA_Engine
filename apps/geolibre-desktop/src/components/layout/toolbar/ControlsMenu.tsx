@@ -1,0 +1,520 @@
+import { useAppStore } from "@geolibre/core";
+import {
+  DEFAULT_EFFECTS_SETTINGS,
+  type EffectsSettings,
+  HALO_EXTENT_MAX,
+  HALO_EXTENT_MIN,
+  HALO_OPACITY_MAX,
+  HALO_OPACITY_MIN,
+} from "@geolibre/plugins";
+import {
+  Button,
+  ColorField,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+  Slider,
+} from "@geolibre/ui";
+import { ClipboardList, SlidersHorizontal, Video } from "lucide-react";
+import { type MouseEvent as ReactMouseEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
+import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
+import { isMenuItemVisible } from "../../../lib/ui-profile";
+import {
+  MAP_CONTROL_ITEMS,
+  type ToolbarChrome,
+  type ToolbarMapControl,
+} from "./constants";
+
+interface ControlsMenuProps {
+  chrome: ToolbarChrome;
+  controlsVisible: Record<ToolbarMapControl, boolean>;
+  panels: ToolbarPanels;
+  effectsActive: boolean;
+  directionsActive: boolean;
+  reverseGeocodeActive: boolean;
+  graticuleActive: boolean;
+  onToggleMapControl: (control: ToolbarMapControl) => void;
+  onToggleEffects: () => void;
+  getEffectsSettings: () => EffectsSettings;
+  onPreviewEffectsSettings: (next: Partial<EffectsSettings>) => void;
+  onCommitEffectsSettings: () => void;
+  onToggleDirections: () => void;
+  onToggleReverseGeocode: () => void;
+  onToggleGraticule: () => void;
+  onOpenFieldCollection: () => void;
+  onOpenRecordTour: () => void;
+}
+
+/** The Controls menu: built-in map controls, atmosphere/routing toggles, and panels. */
+export function ControlsMenu({
+  chrome,
+  controlsVisible,
+  panels,
+  effectsActive,
+  directionsActive,
+  reverseGeocodeActive,
+  graticuleActive,
+  onToggleMapControl,
+  onToggleEffects,
+  getEffectsSettings,
+  onPreviewEffectsSettings,
+  onCommitEffectsSettings,
+  onToggleDirections,
+  onToggleReverseGeocode,
+  onToggleGraticule,
+  onOpenFieldCollection,
+  onOpenRecordTour,
+}: ControlsMenuProps) {
+  const { t } = useTranslation();
+  const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
+  const show = (id: string) => isMenuItemVisible(uiProfile, id);
+  // Atmospheric effects only render on the globe (the engine idles in Mercator),
+  // so the submenu is disabled while the map is in a flat projection (#783). The
+  // GlobeControl toggle syncs this preference via the map "projectiontransition"
+  // event, so the menu reacts the moment the user switches projections.
+  const globeActive = useAppStore((s) => s.preferences.map.projection === "globe");
+  const restrictBounds = useAppStore((s) => s.preferences.map.restrictBounds);
+  const setPreferences = useAppStore((s) => s.setPreferences);
+  // The globe cannot spin while the map bounds are locked, so enabling spin
+  // while they are locked opens a dialog that unlocks the bounds first (#723).
+  const [spinGlobeNoticeOpen, setSpinGlobeNoticeOpen] = useState(false);
+  const handleSpinGlobe = () => {
+    if (!panels.spinGlobe.visible && restrictBounds) {
+      setSpinGlobeNoticeOpen(true);
+      return;
+    }
+    panels.spinGlobe.toggle();
+  };
+  const confirmSpinGlobe = () => {
+    setSpinGlobeNoticeOpen(false);
+    // Unlock the bounds so the globe can actually spin, then start spinning.
+    // Read live state at click time so a concurrent change isn't clobbered.
+    const { preferences } = useAppStore.getState();
+    if (preferences.map.restrictBounds) {
+      setPreferences({
+        ...preferences,
+        map: { ...preferences.map, restrictBounds: false },
+      });
+    }
+    if (!panels.spinGlobe.visible) panels.spinGlobe.toggle();
+  };
+  // Whether the first group (built-in controls + atmosphere/routing toggles) has
+  // any visible item, so the separator below it isn't left orphaned.
+  const anyTopControls =
+    MAP_CONTROL_ITEMS.some((control) =>
+      show(`controls.mapControl.${control.id}`),
+    ) ||
+    show("controls.atmosphereEffects") ||
+    show("controls.spinGlobe") ||
+    show("controls.graticule") ||
+    show("controls.directions") ||
+    show("controls.reverseGeocode");
+  // Whether the middle group (panels) has any visible item. The separator that
+  // precedes the Field Collection / Record Tour group is gated on this so it
+  // never renders as a leading or doubled separator when the group above it is
+  // empty (e.g. a custom profile that hides every panel).
+  const anyMiddleControls =
+    show("controls.search") ||
+    show("controls.colorbar") ||
+    show("controls.legend") ||
+    show("controls.html") ||
+    show("controls.measure") ||
+    show("controls.bookmark") ||
+    show("controls.minimap") ||
+    show("controls.viewState");
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            className={chrome.buttonClass}
+            variant="ghost"
+            size={chrome.buttonSize}
+            aria-label={t("toolbar.menu.controls")}
+          >
+            <SlidersHorizontal className={chrome.iconClassName} />
+            {chrome.renderLabel(t("toolbar.menu.controls"))}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuLabel>{t("toolbar.item.mapControls")}</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {MAP_CONTROL_ITEMS.filter((control) =>
+            show(`controls.mapControl.${control.id}`),
+          ).map((control) => (
+            <DropdownMenuItem
+              key={control.id}
+              onClick={() => onToggleMapControl(control.id)}
+            >
+              {t(control.labelKey)}
+              {controlsVisible[control.id] ? " ✓" : ""}
+            </DropdownMenuItem>
+          ))}
+          {show("controls.atmosphereEffects") && (
+            <AtmosphereEffectsSubmenu
+              active={effectsActive}
+              disabled={!globeActive}
+              onToggle={onToggleEffects}
+              getSettings={getEffectsSettings}
+              onPreview={onPreviewEffectsSettings}
+              onCommit={onCommitEffectsSettings}
+            />
+          )}
+          {show("controls.spinGlobe") && (
+            <DropdownMenuItem onSelect={handleSpinGlobe}>
+              {t("toolbar.item.spinGlobe")}
+              {panels.spinGlobe.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.graticule") && (
+            <DropdownMenuItem onClick={onToggleGraticule}>
+              {t("toolbar.item.graticule")}
+              {graticuleActive ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.directions") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.directionsTooltip")}
+              onClick={onToggleDirections}
+            >
+              {t("toolbar.item.directions")}
+              {directionsActive ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.reverseGeocode") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.reverseGeocodeTooltip")}
+              onClick={onToggleReverseGeocode}
+            >
+              {t("toolbar.item.reverseGeocode")}
+              {reverseGeocodeActive ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {anyTopControls && <DropdownMenuSeparator />}
+          {show("controls.search") && (
+            <DropdownMenuItem onSelect={panels.searchPlaces.toggle}>
+              {t("toolbar.item.search")}
+              {panels.searchPlaces.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.colorbar") && (
+            <DropdownMenuItem onSelect={panels.colorbar.toggle}>
+              {t("toolbar.item.colorbar")}
+              {panels.colorbar.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.legend") && (
+            <DropdownMenuItem onSelect={panels.legend.toggle}>
+              {t("toolbar.item.legend")}
+              {panels.legend.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.html") && (
+            <DropdownMenuItem onSelect={panels.html.toggle}>
+              {t("toolbar.item.html")}
+              {panels.html.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.measure") && (
+            <DropdownMenuItem onSelect={panels.measure.toggle}>
+              {t("toolbar.item.measure")}
+              {panels.measure.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.bookmark") && (
+            <DropdownMenuItem onSelect={panels.bookmark.toggle}>
+              {t("toolbar.item.bookmark")}
+              {panels.bookmark.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.minimap") && (
+            <DropdownMenuItem onSelect={panels.minimap.toggle}>
+              {t("toolbar.item.minimap")}
+              {panels.minimap.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.viewState") && (
+            <DropdownMenuItem onSelect={panels.viewState.toggle}>
+              {t("toolbar.item.viewState")}
+              {panels.viewState.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {anyMiddleControls &&
+            (show("controls.fieldCollection") ||
+              show("controls.recordTour")) && <DropdownMenuSeparator />}
+          {show("controls.fieldCollection") && (
+            <DropdownMenuItem onSelect={onOpenFieldCollection}>
+              <ClipboardList className="mr-2 h-3.5 w-3.5" />
+              {t("toolbar.item.fieldCollection")}
+            </DropdownMenuItem>
+          )}
+          {show("controls.recordTour") && (
+            <DropdownMenuItem onSelect={onOpenRecordTour}>
+              <Video className="mr-2 h-3.5 w-3.5" />
+              {t("toolbar.item.recordTour")}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog
+        open={spinGlobeNoticeOpen}
+        onOpenChange={(open: boolean) => {
+          // Opened programmatically (no trigger), so onOpenChange only fires to
+          // close it (Escape/overlay) — treat that as cancel.
+          if (!open) setSpinGlobeNoticeOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("toolbar.item.spinGlobeBoundsTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("toolbar.item.spinGlobeBoundsDesc")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <p className="text-muted-foreground">
+              {t("toolbar.item.spinGlobeBoundsHint")}
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setSpinGlobeNoticeOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={confirmSpinGlobe}>
+              {t("toolbar.item.spinGlobeBoundsUnlock")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+interface AtmosphereEffectsSubmenuProps {
+  active: boolean;
+  /** Greyed out and non-interactive while the map is not in globe projection. */
+  disabled: boolean;
+  onToggle: () => void;
+  getSettings: () => EffectsSettings;
+  onPreview: (next: Partial<EffectsSettings>) => void;
+  onCommit: () => void;
+}
+
+/**
+ * Submenu for the globe atmosphere: an on/off toggle plus live controls for the
+ * halo color, how far the halo reaches past the globe (the "floats above the
+ * surface" vs "tight to the surface" look), the halo strength, and the deep
+ * space backdrop color.
+ *
+ * Settings live in module state in the effects plugin, so this keeps a local
+ * mirror seeded each time the submenu opens. Edits preview live (instant UI +
+ * globe redraw) on every change, and persist only when a gesture ends — a
+ * slider release, a color input blur, a reset, or the submenu closing — so a
+ * color-picker drag doesn't churn the project-dirty flag on every frame.
+ */
+function AtmosphereEffectsSubmenu({
+  active,
+  disabled,
+  onToggle,
+  getSettings,
+  onPreview,
+  onCommit,
+}: AtmosphereEffectsSubmenuProps) {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<EffectsSettings>(getSettings);
+
+  const preview = (next: Partial<EffectsSettings>) => {
+    setSettings((prev) => ({ ...prev, ...next }));
+    onPreview(next);
+  };
+
+  return (
+    <DropdownMenuSub
+      onOpenChange={(open: boolean) => {
+        if (open) {
+          // Re-seed from the source of truth on open so the controls reflect a
+          // project that loaded new settings while the menu was closed.
+          setSettings(getSettings());
+        } else {
+          // Backstop: persist any previewed change whose gesture-end commit
+          // didn't fire (e.g. a color picked then the menu dismissed).
+          onCommit();
+        }
+      }}
+    >
+      <DropdownMenuSubTrigger
+        // Off the globe the effects render nothing, so disable the submenu and
+        // explain why on hover. The trigger keeps pointer-events active (see
+        // dropdown-menu.tsx) so the native title tooltip still fires (#783).
+        disabled={disabled}
+        title={disabled ? t("toolbar.atmosphere.globeOnly") : undefined}
+      >
+        {t("toolbar.item.atmosphereEffects")}
+        {/* Suppress the check on a disabled (Mercator) row: a ✓ on a greyed,
+            non-interactive entry reads ambiguously. The active state is kept and
+            the mark returns when globe view re-enables the row. */}
+        {!disabled && active ? " ✓" : ""}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-64">
+        <DropdownMenuItem
+          // onSelect (not onClick) fires for both mouse and keyboard
+          // (Enter/Space); preventDefault keeps the submenu open after toggling.
+          onSelect={(e: Event) => {
+            e.preventDefault();
+            onToggle();
+          }}
+        >
+          {t("toolbar.item.atmosphereEnabled")}
+          {active ? " ✓" : ""}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {/* Stop key events from reaching the menu's roving-focus/typeahead
+            handlers so sliders respond to arrow keys and the color inputs work. */}
+        <div
+          className="space-y-3 px-2 py-1.5"
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <ColorRow
+            label={t("toolbar.atmosphere.haloColor")}
+            value={settings.haloColor}
+            onPreview={(haloColor) => preview({ haloColor })}
+            onCommit={onCommit}
+          />
+          <SliderRow
+            label={t("toolbar.atmosphere.haloExtent")}
+            hint={t("toolbar.atmosphere.haloExtentHint")}
+            min={HALO_EXTENT_MIN}
+            max={HALO_EXTENT_MAX}
+            step={0.05}
+            value={settings.haloExtent}
+            format={(v) => `${v.toFixed(2)}×`}
+            onPreview={(haloExtent) => preview({ haloExtent })}
+            onCommit={onCommit}
+          />
+          <SliderRow
+            label={t("toolbar.atmosphere.haloOpacity")}
+            min={HALO_OPACITY_MIN}
+            max={HALO_OPACITY_MAX}
+            step={0.05}
+            value={settings.haloOpacity}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onPreview={(haloOpacity) => preview({ haloOpacity })}
+            onCommit={onCommit}
+          />
+          <ColorRow
+            label={t("toolbar.atmosphere.spaceColor")}
+            value={settings.spaceColor}
+            onPreview={(spaceColor) => preview({ spaceColor })}
+            onCommit={onCommit}
+          />
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          // onSelect fires for mouse and keyboard alike. A discrete action:
+          // preview the defaults, then commit immediately. preventDefault keeps
+          // the submenu open so the reset is visible in the controls.
+          onSelect={(e: Event) => {
+            e.preventDefault();
+            preview({ ...DEFAULT_EFFECTS_SETTINGS });
+            onCommit();
+          }}
+        >
+          {t("toolbar.atmosphere.reset")}
+        </DropdownMenuItem>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+interface ColorRowProps {
+  label: string;
+  value: string;
+  onPreview: (value: string) => void;
+  onCommit: () => void;
+}
+
+function ColorRow({ label, value, onPreview, onCommit }: ColorRowProps) {
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <ColorField
+        fill={false}
+        aria-label={label}
+        eyedropperLabel={label}
+        value={value}
+        // onChange fires continuously while dragging in the picker (preview);
+        // onBlur fires once when the picker closes / focus leaves (commit). The
+        // eyedropper has no blur, so ColorField commits via onCommit instead.
+        onChange={onPreview}
+        onCommit={onCommit}
+        onBlur={onCommit}
+        className="h-6 w-10 cursor-pointer p-0.5"
+        buttonClassName="h-6 w-6"
+      />
+    </label>
+  );
+}
+
+interface SliderRowProps {
+  label: string;
+  hint?: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  format: (value: number) => string;
+  onPreview: (value: number) => void;
+  onCommit: () => void;
+}
+
+function SliderRow({
+  label,
+  hint,
+  min,
+  max,
+  step,
+  value,
+  format,
+  onPreview,
+  onCommit,
+}: SliderRowProps) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground" title={hint}>
+          {label}
+        </span>
+        <span className="tabular-nums text-foreground">{format(value)}</span>
+      </div>
+      <Slider
+        aria-label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={[value]}
+        // onValueChange streams every scrub frame (preview); onValueCommit
+        // fires once on pointer-up / keyboard commit (persist).
+        onValueChange={([v]: number[]) => onPreview(v ?? value)}
+        onValueCommit={onCommit}
+        onClick={(e: ReactMouseEvent) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
